@@ -3,7 +3,7 @@ from PIL import Image
 import shutil
 
 '''
-Converts all .tif images in 'Data/TifData' to .png format and saves them in 'Data/PngData', preserving the directory structure.
+Converts all .tif images in 'Data/TifImages' to .png format and saves them in 'Data/PngImages', preserving the directory structure.
 The TIF images are assumed to have 1 channel, and the PNG images will also have 1 channel.
 '''
 
@@ -11,8 +11,8 @@ The TIF images are assumed to have 1 channel, and the PNG images will also have 
 def main():
     script_dir = Path(__file__).resolve().parent
     data_folder = script_dir / "Data"
-    tif_folder = data_folder / "TifData"
-    png_folder = data_folder / "PngData"
+    tif_folder = data_folder / "TifImages"
+    png_folder = data_folder / "PngImages"
 
     if not tif_folder.is_dir() or not png_folder.is_dir():
         print("Error: input or output folder not found")
