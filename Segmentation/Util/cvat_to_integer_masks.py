@@ -4,11 +4,8 @@ import numpy as np
 import shutil
 
 '''
-nn-UNet requires integer masks for segmentation tasks (0=background, consecutive classes 1, 2, ...), 
-see https://github.com/MIC-DKFZ/nnUNet/blob/master/documentation/dataset_format.md
-
-This script converts CVAT segmentation masks which have 3 channels and a specific RGB color for the foreground class
-into binary integer masks suitable for nn-UNet. The background is set to 0 and the foreground pixels to 1
+This script converts CVAT (semantic) segmentation masks which have 3 channels and a specific RGB color for the foreground class
+into binary integer masks. The background pixels are set to 0 and the foreground pixels to 1
 '''
 
 # RGB value of the mask class in the CVAT segmentation mask images
@@ -16,14 +13,14 @@ CLASS_1_COLOR = (250, 50, 83)
 
 
 def main():
-    script_dir = Path(__file__).resolve().parent
-    data_folder = script_dir / "Data"
+    segmentation_dir = Path(__file__).resolve().parent.parent
+    data_folder = segmentation_dir / "Data"
     input_folder = data_folder / "CvatSegmentationMasks"
-    output_folder = data_folder / "BinarySegmentationMasks"
-    output_folder_bw = data_folder / "BinarySegmentationMasksBlackWhite"
+    output_folder = data_folder / "IntegerSegmentationMasks"
+    output_folder_bw = data_folder / "IntegerSegmentationMasksBlackWhite"
 
-    if not input_folder.is_dir() or not output_folder.is_dir():
-        print("Error: input folder or output folder not found")
+    if not input_folder.is_dir():
+        print("Error: input folder")
         return
 
     if output_folder.exists():
@@ -33,7 +30,8 @@ def main():
     output_folder.mkdir(parents=True, exist_ok=True)
     output_folder_bw.mkdir(parents=True, exist_ok=True)
 
-    for png_path in input_folder.rglob("*.png"):
+    #for png_path in input_folder.rglob("*.png"):
+    for png_path in input_folder.rglob("SegmentationClass/*.png"):
         try:
             img = Image.open(png_path)
             img_array = np.array(img)

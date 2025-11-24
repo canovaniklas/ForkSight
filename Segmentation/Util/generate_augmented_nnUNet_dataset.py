@@ -13,17 +13,26 @@ import numpy as np
 from PIL import Image
 from scipy.ndimage import gaussian_filter, map_coordinates
 import torch
-
+import torchvision.transforms as transforms
 
 SEED = 42
 DATASET_FOLDER_NAME = "Dataset001_TestCvatAugmented"
+USE_BW_MASKS = True
+
+RESIZE = (512, 512)
+
+GAUSSIAN_NOISE = 0.05
 
 MAX_DISTORT = 0.1
-GRID_SIZE = (5, 5)
+GRID_SIZE = (4, 4)
 
 
 def load_png_as_tensor(path: Path) -> torch.Tensor:
     img = Image.open(path)
+    if RESIZE is not None:
+        resize_transform = transforms.Resize(
+            RESIZE, interpolation=transforms.InterpolationMode.BILINEAR)
+        img = resize_transform(img)
     # divide by 255 to normalize to [0,1]
     return torch.from_numpy(np.array(img)).unsqueeze(0).float() / 255.0
 
@@ -73,16 +82,20 @@ def main():
 
     data_dir = Path(__file__).resolve().parent / "Data"
     png_dir = data_dir / "PngImages"
-    integer_masks_dir = data_dir / "BinarySegmentationMasks"
-    integer_masks_bw_dir = data_dir / "BinarySegmentationMasksBlackWhite"
+    integer_masks_dir = data_dir / \
+        ("IntegerSegmentationMasksBlackWhite" if USE_BW_MASKS else "IntegerSegmentationMasks")
     dataset_dir = data_dir / DATASET_FOLDER_NAME
 
     if dataset_dir.exists():
         shutil.rmtree(dataset_dir)
     dataset_dir.mkdir(parents=True, exist_ok=True)
 
-    (dataset_dir / "imagesTr").mkdir(parents=True, exist_ok=True)
-    (dataset_dir / "labelsTr").mkdir(parents=True, exist_ok=True)
+    train_dir = dataset_dir / "imagesTr"
+    train_dir.mkdir(parents=True, exist_ok=True)
+    labels_dir = dataset_dir / "labelsTr"
+    labels_dir.mkdir(parents=True, exist_ok=True)
+    test_dir = dataset_dir / "imagesTs"
+    test_dir.mkdir(parents=True, exist_ok=True)
 
     src_json = Path(__file__).resolve().parent / "nnUNet_dataset.json"
     if not src_json.exists():
@@ -92,37 +105,46 @@ def main():
 
     for png_path in png_dir.rglob("*.png"):
         relative_path = png_path.relative_to(png_dir).parent
-        mask_png_path = integer_masks_bw_dir / relative_path / png_path.name
+        mask_png_path = integer_masks_dir / relative_path / png_path.name
         img_tensor = load_png_as_tensor(png_path)
-        mask_tensor = load_png_as_tensor(mask_png_path)
+
+        try:
+            mask_tensor = load_png_as_tensor(mask_png_path)
+        except FileNotFoundError as e:
+            # If the corresponding mask file is not found, skip this image
+            print(f"Mask file not found for image {png_path}: {e}")
+            continue
 
         (img_tensor_griddistort, mask_tensor_griddistort) = grid_distort(
             img_tensor, mask_tensor)
 
         augmentations = [
-            (img_tensor, mask_tensor, ""),
+            (img_tensor, mask_tensor, None),
             (torch.flip(img_tensor, dims=(-1,)),
              torch.flip(mask_tensor, dims=(-1,)), "hflip"),
             (torch.flip(img_tensor, dims=(-2,)),
              torch.flip(mask_tensor, dims=(-2,)), "vflip"),
             (torch.rot90(img_tensor, k=1, dims=(-2, -1)),
              torch.rot90(mask_tensor, k=1, dims=(-2, -1)), "rot90"),
-            (img_tensor.clamp(1e-6, 1.0).pow(random.uniform(*(0.8, 1.2))),
+            (torch.rot90(img_tensor, k=2, dims=(-2, -1)),
+             torch.rot90(mask_tensor, k=2, dims=(-2, -1)), "rot180"),
+            (img_tensor.clamp(1e-6, 1.0).pow(random.uniform(*(0.6, 1.4))),
              mask_tensor, "gamma"),
             ((img_tensor + torch.randn_like(img_tensor) *
-             0.4).clamp(0.0, 1.0), mask_tensor, "gaussiannoise"),
+              GAUSSIAN_NOISE).clamp(0.0, 1.0), mask_tensor, "gaussiannoise"),
             (img_tensor_griddistort, mask_tensor_griddistort, "griddistort")
         ]
 
-        for img_aug, mask_aug, aug_name in augmentations:
-            target_img_folder = dataset_dir / "imagesTr" / relative_path
-            target_img_folder.mkdir(parents=True, exist_ok=True)
-            target_mask_folder = dataset_dir / "labelsTr" / relative_path
-            target_mask_folder.mkdir(parents=True, exist_ok=True)
+        test_augmentations = [
+            (torch.rot90(img_tensor, k=3, dims=(-2, -1)),
+             torch.rot90(mask_tensor, k=3, dims=(-2, -1)), "rot270"),
+        ]
 
-            base_name = png_path.stem + "_" + aug_name
-            img_out_path = target_img_folder / (base_name + "_0000.png")
-            mask_out_path = target_mask_folder / (base_name + ".png")
+        for img_aug, mask_aug, aug_name in augmentations:
+            base_name = str(relative_path) + "_" + \
+                (png_path.stem if aug_name is None else png_path.stem + "_" + aug_name)
+            img_out_path = train_dir / (base_name + "_0000.png")
+            mask_out_path = labels_dir / (base_name + ".png")
 
             img_out_pil = Image.fromarray(
                 (img_aug.squeeze(0).numpy() * 255).astype(np.uint8))
@@ -133,7 +155,26 @@ def main():
             mask_out_pil.save(mask_out_path)
 
             print(
-                f"Saved augmented image and mask: {img_out_path.relative_to(data_dir)} , {mask_out_path.relative_to(data_dir)}")
+                f"Saved augmented image and mask:\n{img_out_path.relative_to(data_dir)}\n{mask_out_path.relative_to(data_dir)}")
+            print()
+
+        for img_aug, mask_aug, aug_name in test_augmentations:
+            base_name = str(relative_path) + "_" + \
+                (png_path.stem if aug_name is None else png_path.stem + "_" + aug_name)
+            img_out_path = test_dir / (base_name + ".png")
+            mask_out_path = test_dir / (base_name + "_mask.png")
+
+            img_out_pil = Image.fromarray(
+                (img_aug.squeeze(0).numpy() * 255).astype(np.uint8))
+            mask_out_pil = Image.fromarray(
+                (mask_aug.squeeze(0).numpy() * 255).astype(np.uint8))
+
+            img_out_pil.save(img_out_path)
+            mask_out_pil.save(mask_out_path)
+
+            print(
+                f"Saved augmented image and mask TEST data:\n{img_out_path.relative_to(data_dir)}\n{mask_out_path.relative_to(data_dir)}")
+            print()
 
 
 if __name__ == "__main__":

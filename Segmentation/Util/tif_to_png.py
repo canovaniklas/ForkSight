@@ -9,8 +9,8 @@ The TIF images are assumed to have 1 channel, and the PNG images will also have 
 
 
 def main():
-    script_dir = Path(__file__).resolve().parent
-    data_folder = script_dir / "Data"
+    segmentation_dir = Path(__file__).resolve().parent.parent
+    data_folder = segmentation_dir / "Data"
     tif_folder = data_folder / "TifImages"
     png_folder = data_folder / "PngImages"
 
