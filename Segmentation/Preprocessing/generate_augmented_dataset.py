@@ -1,9 +1,3 @@
-'''
-Creates augmented versions of EM png images and their corresponding integer segmentation masks
-and saves them using the appropriate folder structure for nn-UNet training as described in
-https://github.com/MIC-DKFZ/nnUNet/blob/master/documentation/dataset_format.md#dataset-folder-structure
-'''
-
 import os
 from pathlib import Path
 import random
@@ -11,35 +5,45 @@ import shutil
 
 import numpy as np
 from PIL import Image
-from scipy.ndimage import gaussian_filter, map_coordinates
 import torch
 import torchvision.transforms as transforms
 
 SEED = 42
-DATASET_FOLDER_NAME = "Dataset001_TestCvatAugmented"
-USE_BW_MASKS = True
 
-RESIZE = (512, 512)
+RAW_DATA_DIR = "/data/jhehli/raw_data"
+DATASETS_DIR = "/data/jhehli/datasets"
+DATASET_NAME = "SAM_LoRA_Augmented"
 
+RESIZE = (1024, 1024)
+
+P_HFLIP = 0.5
+P_VFLIP = 0.5
+P_ROT = 0.5
+P_GAMMA = 0.5
+P_NOISE = 0.5
+P_GRID_DISTORT = 0.5
 GAUSSIAN_NOISE = 0.05
-
+GAMMA_RANGE = (0.6, 1.4)
 MAX_DISTORT = 0.1
 GRID_SIZE = (4, 4)
+
+USE_BW_MASKS = True
 
 
 def load_png_as_tensor(path: Path) -> torch.Tensor:
     img = Image.open(path)
-    if RESIZE is not None:
-        resize_transform = transforms.Resize(
-            RESIZE, interpolation=transforms.InterpolationMode.BILINEAR)
-        img = resize_transform(img)
-    # divide by 255 to normalize to [0,1]
-    return torch.from_numpy(np.array(img)).unsqueeze(0).float() / 255.0
+    transform = transforms.Compose([
+        transforms.Resize(
+            RESIZE, interpolation=transforms.InterpolationMode.BILINEAR),
+        transforms.ToTensor()])
+    return transform(img)
 
 
 def set_seeds():
     random.seed(SEED)
     np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    torch.cuda.manual_seed_all(SEED)
 
 
 def grid_distort(img: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -49,7 +53,7 @@ def grid_distort(img: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, t
         raise ValueError(
             f"Image and mask must have the same shape, got {tuple(img.shape)} and {tuple(mask.shape)}")
 
-    C, H, W = img.shape
+    _, H, W = img.shape
     ny, nx = GRID_SIZE
     if ny < 2 or nx < 2:
         return img, mask
@@ -80,32 +84,27 @@ def grid_distort(img: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, t
 def main():
     set_seeds()
 
-    data_dir = Path(__file__).resolve().parent / "Data"
-    png_dir = data_dir / "PngImages"
-    integer_masks_dir = data_dir / \
-        ("IntegerSegmentationMasksBlackWhite" if USE_BW_MASKS else "IntegerSegmentationMasks")
-    dataset_dir = data_dir / DATASET_FOLDER_NAME
+    raw_data_dir = Path(RAW_DATA_DIR)
+    raw_images_dir = raw_data_dir / "images"
+    raw_masks_dir = raw_data_dir / "masks"
+
+    dataset_dir = Path(DATASETS_DIR) / DATASET_NAME
+    datataset_images_dir = dataset_dir / "images"
+    dataset_masks_dir = dataset_dir / "masks"
 
     if dataset_dir.exists():
         shutil.rmtree(dataset_dir)
     dataset_dir.mkdir(parents=True, exist_ok=True)
+    datataset_images_dir.mkdir(parents=True, exist_ok=True)
+    dataset_masks_dir.mkdir(parents=True, exist_ok=True)
 
-    train_dir = dataset_dir / "imagesTr"
-    train_dir.mkdir(parents=True, exist_ok=True)
-    labels_dir = dataset_dir / "labelsTr"
-    labels_dir.mkdir(parents=True, exist_ok=True)
-    test_dir = dataset_dir / "imagesTs"
-    test_dir.mkdir(parents=True, exist_ok=True)
+    for png_path in raw_images_dir.rglob("*.png"):
+        relative_path = png_path.relative_to(raw_data_dir)
+        mask_png_path = raw_masks_dir / relative_path
+        print(f"Processing image: {png_path} (exists: {png_path.exists()}), mask: {mask_png_path} (exists: {mask_png_path.exists()})")
 
-    src_json = Path(__file__).resolve().parent / "nnUNet_dataset.json"
-    if not src_json.exists():
-        print("no dataset.json template found")
-        return
-    shutil.copy(src_json, dataset_dir / "dataset.json")
-
-    for png_path in png_dir.rglob("*.png"):
-        relative_path = png_path.relative_to(png_dir).parent
-        mask_png_path = integer_masks_dir / relative_path / png_path.name
+        
+        continue
         img_tensor = load_png_as_tensor(png_path)
 
         try:
@@ -155,7 +154,7 @@ def main():
             mask_out_pil.save(mask_out_path)
 
             print(
-                f"Saved augmented image and mask:\n{img_out_path.relative_to(data_dir)}\n{mask_out_path.relative_to(data_dir)}")
+                f"Saved augmented image and mask:\n{img_out_path.relative_to(dataset_dir)}\n{mask_out_path.relative_to(dataset_dir)}")
             print()
 
         for img_aug, mask_aug, aug_name in test_augmentations:
@@ -173,7 +172,7 @@ def main():
             mask_out_pil.save(mask_out_path)
 
             print(
-                f"Saved augmented image and mask TEST data:\n{img_out_path.relative_to(data_dir)}\n{mask_out_path.relative_to(data_dir)}")
+                f"Saved augmented image and mask TEST data:\n{img_out_path.relative_to(dataset_dir)}\n{mask_out_path.relative_to(dataset_dir)}")
             print()
 
 
