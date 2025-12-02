@@ -26,17 +26,9 @@ GAUSSIAN_NOISE = 0.05
 GAMMA_RANGE = (0.6, 1.4)
 MAX_DISTORT = 0.1
 GRID_SIZE = (4, 4)
+CROP_SIZE = (2048, 2048)
 
 USE_BW_MASKS = True
-
-
-def load_png_as_tensor(path: Path) -> torch.Tensor:
-    img = Image.open(path)
-    transform = transforms.Compose([
-        transforms.Resize(
-            RESIZE, interpolation=transforms.InterpolationMode.BILINEAR),
-        transforms.ToTensor()])
-    return transform(img)
 
 
 def set_seeds():
@@ -44,6 +36,12 @@ def set_seeds():
     np.random.seed(SEED)
     torch.manual_seed(SEED)
     torch.cuda.manual_seed_all(SEED)
+
+
+def load_png_as_tensor(path: Path) -> torch.Tensor:
+    img = Image.open(path)
+    transform = transforms.ToTensor()
+    return transform(img)
 
 
 def grid_distort(img: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -81,6 +79,41 @@ def grid_distort(img: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, t
     return img_out.squeeze(0).clamp(0.0, 1.0), mask_out.squeeze(0).clamp(0.0, 1.0)
 
 
+def random_crop_pair(img: torch.Tensor, mask: torch.Tensor):
+    _, H, W = img.shape
+
+    top = torch.randint(0, H - CROP_SIZE[0] + 1, (1,)).item()
+    left = torch.randint(0, W - CROP_SIZE[1] + 1, (1,)).item()
+
+    cropped_img = img[..., top:top + CROP_SIZE[0], left:left + CROP_SIZE[1]]
+    cropped_mask = mask[..., top:top + CROP_SIZE[0], left:left + CROP_SIZE[1]]
+    return (cropped_img, cropped_mask)
+
+
+def save_tensor_as_png(tensor_img: torch.Tensor, tensor_mask: torch.Tensor, png_path: Path, out_dir_img: Path, out_dir_mask: Path, aug_name: str):
+    transform = transforms.Resize(
+        RESIZE, interpolation=transforms.InterpolationMode.BILINEAR)
+    tensor_img = transform(tensor_img)
+    tensor_mask = transform(tensor_mask)
+
+    aug_suffix = f"_{aug_name}" if aug_name else ""
+    out_file_name = F"{png_path.name.replace('.png', '')}{aug_suffix}.png"
+    img_out_path = out_dir_img / out_file_name
+    mask_out_path = out_dir_mask / out_file_name
+
+    img_out_pil = Image.fromarray(
+        (tensor_img.squeeze(0).numpy() * 255).astype(np.uint8))
+    mask_out_pil = Image.fromarray(
+        (tensor_mask.squeeze(0).numpy() * 255).astype(np.uint8))
+
+    img_out_pil.save(img_out_path)
+    mask_out_pil.save(mask_out_path)
+
+    print(
+        f"Saved augmented image and mask:\n{img_out_path.relative_to(out_dir_img.parent)}\n{mask_out_path.relative_to(out_dir_mask.parent)}")
+    print()
+
+
 def main():
     set_seeds()
 
@@ -89,24 +122,23 @@ def main():
     raw_masks_dir = raw_data_dir / "masks"
 
     dataset_dir = Path(DATASETS_DIR) / DATASET_NAME
-    datataset_images_dir = dataset_dir / "images"
-    dataset_masks_dir = dataset_dir / "masks"
+    train_dir_images = dataset_dir / "train" / "images"
+    train_dir_masks = dataset_dir / "train" / "masks"
+    test_dir_images = dataset_dir / "test" / "images"
+    test_dir_masks = dataset_dir / "test" / "masks"
 
     if dataset_dir.exists():
         shutil.rmtree(dataset_dir)
     dataset_dir.mkdir(parents=True, exist_ok=True)
-    datataset_images_dir.mkdir(parents=True, exist_ok=True)
-    dataset_masks_dir.mkdir(parents=True, exist_ok=True)
+    train_dir_images.mkdir(parents=True, exist_ok=True)
+    train_dir_masks.mkdir(parents=True, exist_ok=True)
+    test_dir_images.mkdir(parents=True, exist_ok=True)
+    test_dir_masks.mkdir(parents=True, exist_ok=True)
 
     for png_path in raw_images_dir.rglob("*.png"):
-        relative_path = png_path.relative_to(raw_data_dir)
-        mask_png_path = raw_masks_dir / relative_path
-        print(f"Processing image: {png_path} (exists: {png_path.exists()}), mask: {mask_png_path} (exists: {mask_png_path.exists()})")
-
-        
-        continue
         img_tensor = load_png_as_tensor(png_path)
 
+        mask_png_path = raw_masks_dir / png_path.name
         try:
             mask_tensor = load_png_as_tensor(mask_png_path)
         except FileNotFoundError as e:
@@ -134,46 +166,29 @@ def main():
             (img_tensor_griddistort, mask_tensor_griddistort, "griddistort")
         ]
 
+        random_crops = [random_crop_pair(
+            img_tensor, mask_tensor) for _ in range(5)]
+        for idx, (img_crop, mask_crop) in enumerate(random_crops):
+            augmentations.append((img_crop, mask_crop, f"randomcrop{idx}"))
+
         test_augmentations = [
             (torch.rot90(img_tensor, k=3, dims=(-2, -1)),
              torch.rot90(mask_tensor, k=3, dims=(-2, -1)), "rot270"),
         ]
 
+        test_random_crops = [random_crop_pair(
+            img_tensor, mask_tensor) for _ in range(2)]
+        for idx, (img_crop, mask_crop) in enumerate(test_random_crops):
+            test_augmentations.append(
+                (img_crop, mask_crop, f"randomcrop{idx}"))
+
         for img_aug, mask_aug, aug_name in augmentations:
-            base_name = str(relative_path) + "_" + \
-                (png_path.stem if aug_name is None else png_path.stem + "_" + aug_name)
-            img_out_path = train_dir / (base_name + "_0000.png")
-            mask_out_path = labels_dir / (base_name + ".png")
-
-            img_out_pil = Image.fromarray(
-                (img_aug.squeeze(0).numpy() * 255).astype(np.uint8))
-            mask_out_pil = Image.fromarray(
-                (mask_aug.squeeze(0).numpy() * 255).astype(np.uint8))
-
-            img_out_pil.save(img_out_path)
-            mask_out_pil.save(mask_out_path)
-
-            print(
-                f"Saved augmented image and mask:\n{img_out_path.relative_to(dataset_dir)}\n{mask_out_path.relative_to(dataset_dir)}")
-            print()
+            save_tensor_as_png(img_aug, mask_aug, png_path,
+                               train_dir_images, train_dir_masks, aug_name)
 
         for img_aug, mask_aug, aug_name in test_augmentations:
-            base_name = str(relative_path) + "_" + \
-                (png_path.stem if aug_name is None else png_path.stem + "_" + aug_name)
-            img_out_path = test_dir / (base_name + ".png")
-            mask_out_path = test_dir / (base_name + "_mask.png")
-
-            img_out_pil = Image.fromarray(
-                (img_aug.squeeze(0).numpy() * 255).astype(np.uint8))
-            mask_out_pil = Image.fromarray(
-                (mask_aug.squeeze(0).numpy() * 255).astype(np.uint8))
-
-            img_out_pil.save(img_out_path)
-            mask_out_pil.save(mask_out_path)
-
-            print(
-                f"Saved augmented image and mask TEST data:\n{img_out_path.relative_to(dataset_dir)}\n{mask_out_path.relative_to(dataset_dir)}")
-            print()
+            save_tensor_as_png(img_aug, mask_aug, png_path,
+                               test_dir_images, test_dir_masks, aug_name)
 
 
 if __name__ == "__main__":

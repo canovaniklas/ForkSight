@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import segment_anything.modeling as sam_modeling
 
@@ -42,7 +43,8 @@ class DecoderAttentionProjLoRA(nn.Module):
 
 
 class SamLoRA(nn.Module):
-    def __init__(self, sam_model: sam_modeling.Sam, r: int):
+    def __init__(self, sam_model: sam_modeling.Sam, r: int, finetune_img_encoder=True,
+                 finetune_mask_decoder=True, finetune_prompt_encoder=True):
         super().__init__()
 
         # freeze image encoder and mask decoder params, leave prompt encoder trainable
@@ -52,31 +54,70 @@ class SamLoRA(nn.Module):
         for param in sam_model.mask_decoder.parameters():
             param.requires_grad = False
 
-        # add LoRA to each image encoder block attention QKV
-        for block in sam_model.image_encoder.blocks:
-            block.attn.qkv = EncoderQKVLoRA(block.attn.qkv, r)
+        if not finetune_prompt_encoder:
+            for param in sam_model.prompt_encoder.parameters():
+                param.requires_grad = False
+
+        if finetune_img_encoder:
+            # add LoRA to each image encoder block attention QKV
+            for block in sam_model.image_encoder.blocks:
+                block.attn.qkv = EncoderQKVLoRA(block.attn.qkv, r)
 
         # add LoRA to each mask decoder transformer attention layer
-        for layer in sam_model.mask_decoder.transformer.layers:
-            for attn in [layer.self_attn, layer.cross_attn_token_to_image, layer.cross_attn_image_to_token]:
-                input_dim, output_dim = attn.embedding_dim, attn.internal_dim
-                attn.q_proj = DecoderAttentionProjLoRA(
-                    attn.q_proj, r, input_dim, output_dim)
-                attn.v_proj = DecoderAttentionProjLoRA(
-                    attn.v_proj, r, input_dim, output_dim)
+        if finetune_mask_decoder:
+            for layer in sam_model.mask_decoder.transformer.layers:
+                for attn in [layer.self_attn, layer.cross_attn_token_to_image, layer.cross_attn_image_to_token]:
+                    input_dim, output_dim = attn.embedding_dim, attn.internal_dim
+                    attn.q_proj = DecoderAttentionProjLoRA(
+                        attn.q_proj, r, input_dim, output_dim)
+                    attn.v_proj = DecoderAttentionProjLoRA(
+                        attn.v_proj, r, input_dim, output_dim)
 
-        # add LoRA to mask decoder transformer final token to image attention
-        decoder_trans_final_attn = sam_model.mask_decoder.transformer.final_attn_token_to_image
-        final_attn_input_dim, final_attn_output_dim = decoder_trans_final_attn.embedding_dim, decoder_trans_final_attn.embedding_dim
-        decoder_trans_final_attn.q_proj = DecoderAttentionProjLoRA(
-            decoder_trans_final_attn.q_proj, r, final_attn_input_dim, final_attn_output_dim)
-        decoder_trans_final_attn.v_proj = DecoderAttentionProjLoRA(
-            decoder_trans_final_attn.v_proj, r, final_attn_input_dim, final_attn_output_dim)
+            # add LoRA to mask decoder transformer final token to image attention
+            decoder_trans_final_attn = sam_model.mask_decoder.transformer.final_attn_token_to_image
+            final_attn_input_dim, final_attn_output_dim = decoder_trans_final_attn.embedding_dim, decoder_trans_final_attn.internal_dim
+            decoder_trans_final_attn.q_proj = DecoderAttentionProjLoRA(
+                decoder_trans_final_attn.q_proj, r, final_attn_input_dim, final_attn_output_dim)
+            decoder_trans_final_attn.v_proj = DecoderAttentionProjLoRA(
+                decoder_trans_final_attn.v_proj, r, final_attn_input_dim, final_attn_output_dim)
 
         self.sam_model = sam_model
 
-    def forward(self, batched_input, multimask_output, image_size):
-        return self.sam_model(batched_input, multimask_output, image_size)
+    def forward(self, batched_input, multimask_output):
+        # return self.sam_model(batched_input, multimask_output)
+
+        input_images = torch.stack(
+            [self.sam_model.preprocess(x["image"]) for x in batched_input], dim=0)
+        image_embeddings = self.sam_model.image_encoder(input_images)
+
+        outputs = []
+        for image_record, curr_embedding in zip(batched_input, image_embeddings):
+            sparse_embeddings, dense_embeddings = self.sam_model.prompt_encoder(
+                points=None,
+                boxes=None,
+                masks=None,
+            )
+            low_res_masks, iou_predictions = self.sam_model.mask_decoder(
+                image_embeddings=curr_embedding.unsqueeze(0),
+                image_pe=self.sam_model.prompt_encoder.get_dense_pe(),
+                sparse_prompt_embeddings=sparse_embeddings,
+                dense_prompt_embeddings=dense_embeddings,
+                multimask_output=multimask_output,
+            )
+            masks = self.sam_model.postprocess_masks(
+                low_res_masks,
+                input_size=image_record["image"].shape[-2:],
+                original_size=image_record["original_size"],
+            )
+            masks = masks > self.sam_model.mask_threshold
+            outputs.append(
+                {
+                    "masks": masks,
+                    "iou_predictions": iou_predictions,
+                    "low_res_logits": low_res_masks,
+                }
+            )
+        return outputs
 
     @property
     def device(self):
