@@ -20,17 +20,22 @@ import wandb
 
 USE_WANDB = True
 
-FINETUNE_IMAGE_ENCODER = True
+FINETUNE_IMAGE_ENCODER = False
 FINETUNE_MASK_DECODER = True
 FINETUNE_PROMPT_ENCODER = True
 
-TRAIN_IMAGES_DIR = Path(
-    "/data/jhehli/datasets/SAM_LoRA_Augmented/train/images/")
-TRAIN_MASKS_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/train/masks/")
-TEST_IMAGES_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/test/images/")
-TEST_MASKS_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/test/masks/")
+#TRAIN_IMAGES_DIR = Path(
+#    "/data/jhehli/datasets/SAM_LoRA_Augmented/train/images/")
+#TRAIN_MASKS_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/train/masks/")
+#TEST_IMAGES_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/test/images/")
+#TEST_MASKS_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/test/masks/")
 
-LR = 0.0005
+TRAIN_IMAGES_DIR = Path(
+    "/data/jhehli/datasets/SAM_LoRA_Augmented/train/lowres_images/")
+TRAIN_MASKS_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/train/lowres_masks/")
+TEST_IMAGES_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/test/lowres_images/")
+TEST_MASKS_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/test/lowres_masks/")
+LR = 0.001
 NUM_CLASSES = 1  # binary segmentation (DNA vs background)
 BATCH_SIZE = 2
 MAX_EPOCHS = 100
@@ -166,7 +171,7 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
         config={
             "learning_rate": LR,
             "architecture": f"SAM LoRA ({', '.join(architecture_suffixes)})",
-            "dataset": f"custom segmentation dataset (training set size: {trainset_len}, validation set size: {valset_len})",
+            "dataset": f"lowres custom segmentation dataset (training set size: {trainset_len}, validation set size: {valset_len})",
             "num_base_training_images": len(base_training_images),
             "base_training_images": str(base_training_images),
             "epochs": MAX_EPOCHS,
