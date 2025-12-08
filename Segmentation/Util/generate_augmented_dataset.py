@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import random
 import shutil
+import sys
 
 import numpy as np
 from PIL import Image
@@ -10,8 +11,11 @@ import torchvision.transforms as transforms
 
 SEED = 42
 
-RAW_DATA_DIR = "/data/jhehli/raw_data"
-DATASETS_DIR = "/data/jhehli/datasets"
+# RAW_DATA_DIR = "/data/jhehli/raw_data"
+# RAW_DATA_DIR = "/home/jhehli/data/raw_data"
+RAW_DATA_DIR = "C:\\Users\\juhe9\\repos\\MasterThesis\\ForkSight\\Segmentation\\Data"
+# DATASETS_DIR = "/data/jhehli/datasets"
+DATASETS_DIR = "/home//jhehli/data/datasets"
 DATASET_NAME = "SAM_LoRA_Augmented"
 
 RESIZE = (1024, 1024)
@@ -118,14 +122,14 @@ def main():
     set_seeds()
 
     raw_data_dir = Path(RAW_DATA_DIR)
-    raw_images_dir = raw_data_dir / "images"
-    raw_masks_dir = raw_data_dir / "masks"
+    raw_images_dir = raw_data_dir / "images_4096"
+    raw_masks_dir = raw_data_dir / "masks_4096"
 
     dataset_dir = Path(DATASETS_DIR) / DATASET_NAME
-    train_dir_images = dataset_dir / "train" / "images"
-    train_dir_masks = dataset_dir / "train" / "masks"
-    test_dir_images = dataset_dir / "test" / "images"
-    test_dir_masks = dataset_dir / "test" / "masks"
+    train_dir_images = dataset_dir / "train" / f"images_{RESIZE[0]}"
+    train_dir_masks = dataset_dir / "train" / f"masks_{RESIZE[0]}"
+    test_dir_images = dataset_dir / "test" / f"images_{RESIZE[0]}"
+    test_dir_masks = dataset_dir / "test" / f"masks_{RESIZE[0]}"
 
     if dataset_dir.exists():
         shutil.rmtree(dataset_dir)
@@ -134,6 +138,12 @@ def main():
     train_dir_masks.mkdir(parents=True, exist_ok=True)
     test_dir_images.mkdir(parents=True, exist_ok=True)
     test_dir_masks.mkdir(parents=True, exist_ok=True)
+
+    img_paths = [str(p) for p in raw_images_dir.rglob("*.png")]
+    random.shuffle(img_paths)
+    split_idx = int(0.9 * len(img_paths))
+    train_image_paths = img_paths[:split_idx]
+    test_image_paths = img_paths[split_idx:]
 
     for png_path in raw_images_dir.rglob("*.png"):
         img_tensor = load_png_as_tensor(png_path)
@@ -159,6 +169,8 @@ def main():
              torch.rot90(mask_tensor, k=1, dims=(-2, -1)), "rot90"),
             (torch.rot90(img_tensor, k=2, dims=(-2, -1)),
              torch.rot90(mask_tensor, k=2, dims=(-2, -1)), "rot180"),
+            (torch.rot90(img_tensor, k=3, dims=(-2, -1)),
+             torch.rot90(mask_tensor, k=3, dims=(-2, -1)), "rot270"),
             (img_tensor.clamp(1e-6, 1.0).pow(random.uniform(*(0.6, 1.4))),
              mask_tensor, "gamma"),
             ((img_tensor + torch.randn_like(img_tensor) *
@@ -171,24 +183,11 @@ def main():
         for idx, (img_crop, mask_crop) in enumerate(random_crops):
             augmentations.append((img_crop, mask_crop, f"randomcrop{idx}"))
 
-        test_augmentations = [
-            (torch.rot90(img_tensor, k=3, dims=(-2, -1)),
-             torch.rot90(mask_tensor, k=3, dims=(-2, -1)), "rot270"),
-        ]
-
-        test_random_crops = [random_crop_pair(
-            img_tensor, mask_tensor) for _ in range(2)]
-        for idx, (img_crop, mask_crop) in enumerate(test_random_crops):
-            test_augmentations.append(
-                (img_crop, mask_crop, f"randomcrop{idx}"))
-
+        out_dir_images = train_dir_images if png_path in train_image_paths else test_dir_images
+        out_dir_masks = train_dir_masks if png_path in train_image_paths else test_dir_masks
         for img_aug, mask_aug, aug_name in augmentations:
             save_tensor_as_png(img_aug, mask_aug, png_path,
-                               train_dir_images, train_dir_masks, aug_name)
-
-        for img_aug, mask_aug, aug_name in test_augmentations:
-            save_tensor_as_png(img_aug, mask_aug, png_path,
-                               test_dir_images, test_dir_masks, aug_name)
+                               out_dir_images, out_dir_masks, aug_name)
 
 
 if __name__ == "__main__":

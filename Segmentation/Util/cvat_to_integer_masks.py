@@ -15,45 +15,42 @@ CLASS_1_COLOR = (250, 50, 83)
 BW_MASKS = True
 
 RAW_DATA_DIR = "C:\\Users\\juhe9\\repos\\MasterThesis\\ForkSight\\Segmentation\\Data"
+CVAT_EXPORT_DIRS = ["20251208_segmentation_mask_1.1"]
 
 
 def main():
     raw_data_dir = Path(RAW_DATA_DIR)
-    input_folder = raw_data_dir / "CvatSegmentationMasks"
-    output_folder = raw_data_dir / "masks"
+    cvat_dir = raw_data_dir / "cvat"
+    output_folder = raw_data_dir / "masks_4096"
 
-    if not input_folder.is_dir():
-        print("Error: input folder")
-        return
+    for cvat_export_dir in CVAT_EXPORT_DIRS:
+        input_folder = cvat_dir / cvat_export_dir
 
-    if output_folder.exists():
-        shutil.rmtree(output_folder)
-    output_folder.mkdir(parents=True, exist_ok=True)
+        if not input_folder.is_dir():
+            print("Error: input folder")
+            return
 
-    # for png_path in input_folder.rglob("*.png"):
-    for png_path in input_folder.rglob("SegmentationClass/*.png"):
-        try:
-            img = Image.open(png_path)
-            img_array = np.array(img)
+        if output_folder.exists():
+            shutil.rmtree(output_folder)
+        output_folder.mkdir(parents=True, exist_ok=True)
 
-            binary_mask = np.all(img_array == CLASS_1_COLOR,
-                                 axis=-1).astype(np.uint8)
-            out_img = Image.fromarray(
-                binary_mask * 255 if BW_MASKS else binary_mask.astype(np.uint8))
+        for png_path in input_folder.rglob("SegmentationClass/*.png"):
+            try:
+                img = Image.open(png_path)
+                img_array = np.array(img)
 
-            orig_folder_name = png_path.parent.parent.name
-            orig_png_name = png_path.name
-            new_name = re.sub(r"Site of interest\s*\((\d+)\)",
-                              r"soi_\1", orig_png_name).lower()
-            new_name = f"{orig_folder_name.lower()}_{new_name}"
+                binary_mask = np.all(img_array == CLASS_1_COLOR,
+                                     axis=-1).astype(np.uint8)
+                out_img = Image.fromarray(
+                    binary_mask * 255 if BW_MASKS else binary_mask.astype(np.uint8))
 
-            out_img.save(output_folder / new_name)
+                out_img.save(output_folder / png_path.name)
 
-            print(
-                f"Converted: {png_path.relative_to(raw_data_dir)} → {(output_folder / new_name).relative_to(raw_data_dir)}")
+                print(
+                    f"Converted: {png_path.relative_to(cvat_dir)} → {png_path.name}")
 
-        except Exception as e:
-            print(f"Failed to convert {png_path}: {e}")
+            except Exception as e:
+                print(f"Failed to convert {png_path}: {e}")
 
 
 if __name__ == "__main__":

@@ -3,10 +3,12 @@ import shutil
 import torchvision.transforms.functional as F
 from PIL import Image
 
+RAW_DATA_DIR = "/home/jhehli/data/raw_data"
+DATASETS_DIR = "/home//jhehli/data/datasets"
 
 base_dirs = [
-    "/data/jhehli/datasets/SAM_LoRA_Augmented/train/",
-    "/data/jhehli/datasets/SAM_LoRA_Augmented/test/",
+    DATASETS_DIR + "/SAM_LoRA_Augmented/train/",
+    DATASETS_DIR + "/SAM_LoRA_Augmented/test/",
 ]
 
 
@@ -16,7 +18,7 @@ def init_folder(folder_path: Path):
     folder_path.mkdir(parents=True, exist_ok=True)
 
 
-def crop_image_to_lowres(input_image_path: Path, output_dir: Path):
+def crop_image_grid(input_image_path: Path, output_dir: Path):
     img = Image.open(input_image_path)
     img = F.to_tensor(img).unsqueeze(0)
 
@@ -32,21 +34,21 @@ def crop_image_to_lowres(input_image_path: Path, output_dir: Path):
 
 
 for base_dir in base_dirs:
-    images_dir = Path(base_dir) / "images"
-    masks_dir = Path(base_dir) / "masks"
-    lowres_images_dir = Path(base_dir) / "lowres_images"
-    lowres_masks_dir = Path(base_dir) / "lowres_masks"
+    images_dir = Path(base_dir) / "images_1024"
+    masks_dir = Path(base_dir) / "masks_1024"
+    cropped_images_dir = Path(base_dir) / "images_256"
+    cropped_masks_dir = Path(base_dir) / "masks_256"
 
     if not images_dir.exists() or not masks_dir.exists():
         print(
             f"Skipping {base_dir} as it does not contain images/ and masks/ directories")
         continue
 
-    init_folder(lowres_images_dir)
-    init_folder(lowres_masks_dir)
+    init_folder(cropped_images_dir)
+    init_folder(cropped_masks_dir)
 
     for png_file in images_dir.glob("*.png"):
-        crop_image_to_lowres(png_file, lowres_images_dir)
+        crop_image_grid(png_file, cropped_images_dir)
 
     for png_file in masks_dir.glob("*.png"):
-        crop_image_to_lowres(png_file, lowres_masks_dir)
+        crop_image_grid(png_file, cropped_masks_dir)
