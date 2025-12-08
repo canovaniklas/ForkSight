@@ -270,6 +270,7 @@ def train():
     )
 
     if USE_WANDB:
+        wandb.login(key="aa4147e2bb5f0315cc9f35b6475561223915112c")
         wandb_run = init_wandb_run(len(trainset), len(
             validationset), sum(p.numel() for _, p in trainable_params))
 
