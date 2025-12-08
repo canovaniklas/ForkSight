@@ -4,7 +4,7 @@ import torchvision.transforms.functional as F
 from PIL import Image
 
 RAW_DATA_DIR = "/home/jhehli/data/raw_data"
-DATASETS_DIR = "/home//jhehli/data/datasets"
+DATASETS_DIR = "/home/jhehli/data/datasets"
 
 base_dirs = [
     DATASETS_DIR + "/SAM_LoRA_Augmented/train/",
