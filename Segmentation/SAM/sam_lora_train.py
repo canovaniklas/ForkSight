@@ -24,21 +24,26 @@ FINETUNE_IMAGE_ENCODER = False
 FINETUNE_MASK_DECODER = True
 FINETUNE_PROMPT_ENCODER = True
 
-#TRAIN_IMAGES_DIR = Path(
-#    "/data/jhehli/datasets/SAM_LoRA_Augmented/train/images/")
-#TRAIN_MASKS_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/train/masks/")
-#TEST_IMAGES_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/test/images/")
-#TEST_MASKS_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/test/masks/")
+MODEL_CHECKPOINTS_DIR = "/home/jhehli/data/model_checkpoints/"
+
+# TRAIN_IMAGES_DIR = Path(
+#    "/home/jhehli/data/datasets/SAM_LoRA_Augmented/train/images/")
+# TRAIN_MASKS_DIR = Path("/home/jhehli/data/datasets/SAM_LoRA_Augmented/train/masks/")
+# TEST_IMAGES_DIR = Path("/home/jhehli/data/datasets/SAM_LoRA_Augmented/test/images/")
+# TEST_MASKS_DIR = Path("/home/jhehli/data/datasets/SAM_LoRA_Augmented/test/masks/")
 
 TRAIN_IMAGES_DIR = Path(
-    "/data/jhehli/datasets/SAM_LoRA_Augmented/train/lowres_images/")
-TRAIN_MASKS_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/train/lowres_masks/")
-TEST_IMAGES_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/test/lowres_images/")
-TEST_MASKS_DIR = Path("/data/jhehli/datasets/SAM_LoRA_Augmented/test/lowres_masks/")
+    "/home/jhehli/data/datasets/SAM_LoRA_Augmented/train/images_256/")
+TRAIN_MASKS_DIR = Path(
+    "/home/jhehli/data/datasets/SAM_LoRA_Augmented/train/masks_256/")
+TEST_IMAGES_DIR = Path(
+    "/home/jhehli/data/datasets/SAM_LoRA_Augmented/test/images_256/")
+TEST_MASKS_DIR = Path(
+    "/home/jhehli/data/datasets/SAM_LoRA_Augmented/test/masks_256/")
 LR = 0.001
 NUM_CLASSES = 1  # binary segmentation (DNA vs background)
-BATCH_SIZE = 2
-MAX_EPOCHS = 100
+BATCH_SIZE = 6
+MAX_EPOCHS = 200
 
 UPSAMPLE_LOWRES_LOGITS = None  # set to None to disable upsampling
 
@@ -187,7 +192,7 @@ def init_model(device: torch.device) -> SamLoRA:
     print(
         f"using python: {sys.executable}, {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}\n")
 
-    sam_checkpoint = "/data/jhehli/model_checkpoints/sam_vit_b_01ec64.pth"
+    sam_checkpoint = str(Path(MODEL_CHECKPOINTS_DIR) / "sam_vit_b_01ec64.pth")
     model_type = "vit_b"
     sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
     sam.to(device)
