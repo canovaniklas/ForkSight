@@ -3,9 +3,15 @@ from PIL import Image
 import shutil
 import numpy as np
 
-DATASETS_DIR = "C:\\Users\\juhe9\\repos\\MasterThesis\\ForkSight\\Segmentation\\Data"
+RAW_DATA_DIR = "C:\\Users\\juhe9\\repos\\MasterThesis\\ForkSight\\Segmentation\\Data"
 IN_IMAGES = [
-    "Z:\\imcrdata\\2024_Andrea_NBS1\\2024_Andrea_NBS1_R1\\20240523_Andrea_Orange\\LayersData\\highmag\\Tile Set (17)\\Tile_016-003-000000_0-000.tif"
+    "Z:\\imcrdata\\2024_Andrea_ETP_R2\\20240911_Andrea_Black\\LayersData\\highmag\\Tile Set (14)\\Tile_007-004-000000_0-000.tif",
+    "Z:\\imcrdata\\2024_Andrea_NBS1\\2024_Andrea_NBS1_R1\\20240523_Andrea_Orange\\LayersData\\highmag\\Tile Set (17)\\Tile_016-003-000000_0-000.tif",
+    "Z:\\imcrdata\\2025_Dani_SMC1\\R1\\20250811_Dani_Vegetariana\\LayersData\\highmag\\Tile Set (2)\\Tile_005-009-000000_0-000.tif",
+    "Z:\\imcrdata\\2025_Filip_RNF20\\2025_Filip_RNF20_R2\\20250107_Filip_Zurich\\LayersData\\highmag\\Tile Set (13)\\Tile_002-006-000000_0-000.tif",
+    "Z:\\imcrdata\\2025_Jana_MRE11_Inh\\20250812_Jana_Ant\\LayersData\\highmag\\Tile Set (24)\\Tile_002-006-000000_0-000.tif",
+    "Z:\\imcrdata\\2025_Veronica_Lamin\\2024_Veronica_Lamin\\2024_Veronica_Lamin_R1\\20240529_Veronica_Sample5\\LayersData\\highmag\\Tile Set (12)\\Tile_001-003-000000_0-000.tif",
+    "Z:\\imcrdata\\2025_Veronica_Lamin\\2025_Veronica_G9ai\\R2\\20250708_Vero_Larch_Part2\\LayersData\\highmag\\Tile Set (8)\\Tile_009-011-000000_0-000.tif"
 ]
 
 
@@ -54,7 +60,7 @@ def normalize_convert_uint8(img: Image.Image) -> Image.Image:
 
 
 def main():
-    out_dir_path = Path(DATASETS_DIR) / "images_4096"
+    out_dir_path = Path(RAW_DATA_DIR) / "images_4096"
     img_paths = [Path(p) for p in IN_IMAGES]
 
     init_folder(out_dir_path)
