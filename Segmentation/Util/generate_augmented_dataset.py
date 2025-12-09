@@ -14,7 +14,7 @@ SEED = 42
 # RAW_DATA_DIR = "/data/jhehli/raw_data"
 RAW_DATA_DIR = "/home/jhehli/data/raw_data"
 # DATASETS_DIR = "/data/jhehli/datasets"
-DATASETS_DIR = "/home//jhehli/data/datasets"
+DATASETS_DIR = "/home/jhehli/data/datasets"
 DATASET_NAME = "SAM_LoRA_Augmented"
 
 RESIZE = (1024, 1024)
