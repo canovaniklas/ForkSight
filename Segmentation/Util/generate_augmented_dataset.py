@@ -182,8 +182,10 @@ def main():
         for idx, (img_crop, mask_crop) in enumerate(random_crops):
             augmentations.append((img_crop, mask_crop, f"randomcrop{idx}"))
 
-        out_dir_images = train_dir_images if png_path in train_image_paths else test_dir_images
-        out_dir_masks = train_dir_masks if png_path in train_image_paths else test_dir_masks
+        out_dir_images = train_dir_images if str(
+            png_path) in train_image_paths else test_dir_images
+        out_dir_masks = train_dir_masks if str(
+            png_path) in train_image_paths else test_dir_masks
         for img_aug, mask_aug, aug_name in augmentations:
             save_tensor_as_png(img_aug, mask_aug, png_path,
                                out_dir_images, out_dir_masks, aug_name)
