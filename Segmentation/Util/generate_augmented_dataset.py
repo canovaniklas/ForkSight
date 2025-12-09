@@ -113,7 +113,7 @@ def save_tensor_as_png(tensor_img: torch.Tensor, tensor_mask: torch.Tensor, png_
     mask_out_pil.save(mask_out_path)
 
     print(
-        f"Saved augmented image and mask:\n{img_out_path.relative_to(out_dir_img.parent)}\n{mask_out_path.relative_to(out_dir_mask.parent)}")
+        f"Saved augmented image and mask:\n{img_out_path.relative_to(out_dir_img.parent.parent)}\n{mask_out_path.relative_to(out_dir_mask.parent.parent)}")
     print()
 
 

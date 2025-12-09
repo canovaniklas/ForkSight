@@ -48,7 +48,9 @@ for base_dir in base_dirs:
     init_folder(cropped_masks_dir)
 
     for png_file in images_dir.glob("*.png"):
+        print(f"Cropping image patches from image {png_file.name}...")
         crop_image_grid(png_file, cropped_images_dir)
 
     for png_file in masks_dir.glob("*.png"):
+        print(f"Cropping mask patches from mask {png_file.name}...")
         crop_image_grid(png_file, cropped_masks_dir)

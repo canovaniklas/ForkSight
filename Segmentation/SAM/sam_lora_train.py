@@ -11,7 +11,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
 import torchvision.transforms as transforms
 from pathlib import Path
 from PIL import Image
@@ -42,7 +42,7 @@ TEST_MASKS_DIR = Path(
     "/home/jhehli/data/datasets/SAM_LoRA_Augmented/test/masks_256/")
 LR = 0.001
 NUM_CLASSES = 1  # binary segmentation (DNA vs background)
-BATCH_SIZE = 6
+BATCH_SIZE = 8
 MAX_EPOCHS = 200
 
 UPSAMPLE_LOWRES_LOGITS = None  # set to None to disable upsampling
@@ -54,7 +54,8 @@ class SegmentationDataset(Dataset):
         self.masks_dir = masks_dir
 
     def _load_image(self, path: Path, is_mask: bool = False) -> torch.Tensor:
-        transform = transforms.Compose([transforms.Resize((1024, 1024), interpolation=transforms.InterpolationMode.BILINEAR),
+        # using nearest neighbor interpolation for masks to preserve label values (no interpolation)
+        transform = transforms.Compose([transforms.Resize((1024, 1024), interpolation=(transforms.InterpolationMode.NEAREST if is_mask else transforms.InterpolationMode.BILINEAR)),
                                         transforms.ToTensor()])
 
         if not is_mask:
@@ -241,17 +242,24 @@ def train():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     sam_lora = init_model(device)
 
-    trainset = SegmentationDataset(
+    dataset = SegmentationDataset(
         images_dir=TRAIN_IMAGES_DIR, masks_dir=TRAIN_MASKS_DIR)
-    validationset = SegmentationDataset(
-        images_dir=TEST_IMAGES_DIR, masks_dir=TEST_MASKS_DIR)
-    print("\nNumber of training samples:", len(trainset))
-    print("Number of validation samples:", len(validationset), "\n")
+
+    indices = list(range(len(dataset)))
+    np.random.shuffle(indices)
+    split = int(0.8 * len(indices))
+    train_indices, val_indices = indices[:split], indices[split:]
+
+    print("\nNumber of training samples:", len(train_indices))
+    print("Number of validation samples:", len(val_indices), "\n")
+
+    train_sampler = SubsetRandomSampler(train_indices)
+    val_sampler = SubsetRandomSampler(val_indices)
 
     trainloader = DataLoader(
-        trainset, batch_size=BATCH_SIZE, shuffle=True)
+        dataset, batch_size=BATCH_SIZE, sampler=train_sampler)
     validationloader = DataLoader(
-        validationset, batch_size=BATCH_SIZE, shuffle=False)
+        dataset, batch_size=BATCH_SIZE, sampler=val_sampler)
 
     loss_fn = BCEWithLogitsDiceLoss()
 
@@ -271,8 +279,8 @@ def train():
 
     if USE_WANDB:
         wandb.login(key="aa4147e2bb5f0315cc9f35b6475561223915112c")
-        wandb_run = init_wandb_run(len(trainset), len(
-            validationset), sum(p.numel() for _, p in trainable_params))
+        wandb_run = init_wandb_run(len(train_indices), len(
+            val_indices), sum(p.numel() for _, p in trainable_params))
 
     for epoch in range(MAX_EPOCHS):
         print(f"\nEpoch {epoch+1}/{MAX_EPOCHS}")
@@ -316,8 +324,8 @@ def train():
                 loss = loss_fn(output_logits, target_masks)
                 total_validation_loss += loss.item() * len(batched_input)
 
-        mean_training_loss = total_training_loss / len(trainset)
-        mean_validation_loss = total_validation_loss / len(validationset)
+        mean_training_loss = total_training_loss / len(train_indices)
+        mean_validation_loss = total_validation_loss / len(val_indices)
 
         print(f"    Train Loss: {mean_training_loss:.4f}")
         print(f"    Validation Loss: {mean_validation_loss:.4f}")
