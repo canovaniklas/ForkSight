@@ -1,14 +1,30 @@
+import os
 from pathlib import Path
 import shutil
 import torchvision.transforms.functional as F
 from PIL import Image
 
-RAW_DATA_DIR = "/home/jhehli/data/raw_data"
-DATASETS_DIR = "/home/jhehli/data/datasets"
+from .env_utils import load_segmentation_env
+
+load_segmentation_env()
+
+DATASETS_DIR = os.getenv("DATASETS_DIR")
+
+DATASET_NAME = os.getenv("DATASET_NAME", "SAM_LoRA_Augmented")
+
+HIGHRES_IMG_DIR_NAME = os.getenv("HIGHRES_IMG_DIR_NAME", "images_4096")
+HIGHRES_MASK_DIR_NAME = os.getenv("HIGHRES_MASK_DIR_NAME", "masks_4096")
+LOWRES_IMG_DIR_NAME = os.getenv("LOWRES_IMG_DIR_NAME", "images_1024")
+LOWRES_MASK_DIR_NAME = os.getenv("LOWRES_MASK_DIR_NAME", "masks_1024")
+CROPPED_AUG_IMG_DIR_NAME = os.getenv("CROPPED_AUG_IMG_DIR_NAME", "images_256")
+CROPPED_AUG_MASK_DIR_NAME = os.getenv("CROPPED_AUG_MASK_DIR_NAME", "masks_256")
+
+if not DATASETS_DIR:
+    raise ValueError("DATASETS_DIR environment variable must be set.")
 
 base_dirs = [
-    DATASETS_DIR + "/SAM_LoRA_Augmented/train/",
-    DATASETS_DIR + "/SAM_LoRA_Augmented/test/",
+    Path(DATASETS_DIR) / DATASET_NAME / "train",
+    Path(DATASETS_DIR) / DATASET_NAME / "test",
 ]
 
 
@@ -34,10 +50,10 @@ def crop_image_grid(input_image_path: Path, output_dir: Path):
 
 
 for base_dir in base_dirs:
-    images_dir = Path(base_dir) / "images_1024"
-    masks_dir = Path(base_dir) / "masks_1024"
-    cropped_images_dir = Path(base_dir) / "images_256"
-    cropped_masks_dir = Path(base_dir) / "masks_256"
+    images_dir = Path(base_dir) / LOWRES_IMG_DIR_NAME
+    masks_dir = Path(base_dir) / LOWRES_MASK_DIR_NAME
+    cropped_images_dir = Path(base_dir) / CROPPED_AUG_IMG_DIR_NAME
+    cropped_masks_dir = Path(base_dir) / CROPPED_AUG_MASK_DIR_NAME
 
     if not images_dir.exists() or not masks_dir.exists():
         print(

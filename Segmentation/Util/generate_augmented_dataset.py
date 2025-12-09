@@ -2,36 +2,40 @@ import os
 from pathlib import Path
 import random
 import shutil
-import sys
 
 import numpy as np
 from PIL import Image
 import torch
 import torchvision.transforms as transforms
 
-SEED = 42
+from .env_utils import load_as, load_as_tuple, load_segmentation_env
 
-# RAW_DATA_DIR = "/data/jhehli/raw_data"
-RAW_DATA_DIR = "/home/jhehli/data/raw_data"
-# DATASETS_DIR = "/data/jhehli/datasets"
-DATASETS_DIR = "/home/jhehli/data/datasets"
-DATASET_NAME = "SAM_LoRA_Augmented"
+load_segmentation_env()
 
-RESIZE = (1024, 1024)
+SEED = load_as("SEED", int, 42)
 
-P_HFLIP = 0.5
-P_VFLIP = 0.5
-P_ROT = 0.5
-P_GAMMA = 0.5
-P_NOISE = 0.5
-P_GRID_DISTORT = 0.5
-GAUSSIAN_NOISE = 0.05
-GAMMA_RANGE = (0.6, 1.4)
-MAX_DISTORT = 0.1
-GRID_SIZE = (4, 4)
-CROP_SIZE = (2048, 2048)
+RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
+DATASETS_DIR = os.getenv("DATASETS_DIR")
+DATASET_NAME = os.getenv("DATASET_NAME", "SAM_LoRA_Augmented")
 
-USE_BW_MASKS = True
+HIGHRES_IMG_DIR_NAME = os.getenv("HIGHRES_IMG_DIR_NAME", "images_4096")
+HIGHRES_MASK_DIR_NAME = os.getenv("HIGHRES_MASK_DIR_NAME", "masks_4096")
+LOWRES_IMG_DIR_NAME = os.getenv("LOWRES_IMG_DIR_NAME", "images_1024")
+LOWRES_MASK_DIR_NAME = os.getenv("LOWRES_MASK_DIR_NAME", "masks_1024")
+
+DATASET_LOWRES_RESIZE = load_as_tuple(
+    "DATASET_LOWRES_RESIZE", "1024,1024", int)
+DATASET_GAUSSIAN_NOISE = load_as("DATASET_GAUSSIAN_NOISE", float, "0.05")
+DATASET_GAMMA_RANGE = load_as_tuple("DATASET_GAMMA_RANGE", "0.6,1.4", float)
+DATASET_MAX_DISTORT = load_as("DATASET_MAX_DISTORT", float, "0.1")
+DATASET_DISTORT_GRID_SIZE = load_as_tuple(
+    "DATASET_DISTORT_GRID_SIZE", "4,4", int)
+DATASET_RANDOM_CROP_SIZE = load_as_tuple(
+    "DATASET_RANDOM_CROP_SIZE", "2048,2048", int)
+
+if not RAW_DATA_DIR or not DATASETS_DIR:
+    raise ValueError(
+        "RAW_DATA_DIR and DATASETS_DIR environment variables must be set.")
 
 
 def set_seeds():
@@ -55,7 +59,7 @@ def grid_distort(img: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, t
             f"Image and mask must have the same shape, got {tuple(img.shape)} and {tuple(mask.shape)}")
 
     _, H, W = img.shape
-    ny, nx = GRID_SIZE
+    ny, nx = DATASET_DISTORT_GRID_SIZE
     if ny < 2 or nx < 2:
         return img, mask
 
@@ -65,7 +69,7 @@ def grid_distort(img: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, t
     base_grid = torch.stack([base_x, base_y], dim=-1).unsqueeze(0)
     disp_coarse = torch.zeros(
         (1, 2, ny, nx), device=img.device, dtype=img.dtype)
-    max_dy, max_dx = 2.0 * MAX_DISTORT, 2.0 * MAX_DISTORT
+    max_dy, max_dx = 2.0 * DATASET_MAX_DISTORT, 2.0 * DATASET_MAX_DISTORT
 
     for iy in range(1, ny - 1):
         for ix in range(1, nx - 1):
@@ -85,19 +89,23 @@ def grid_distort(img: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, t
 def random_crop_pair(img: torch.Tensor, mask: torch.Tensor):
     _, H, W = img.shape
 
-    top = torch.randint(0, H - CROP_SIZE[0] + 1, (1,)).item()
-    left = torch.randint(0, W - CROP_SIZE[1] + 1, (1,)).item()
+    top = torch.randint(0, H - DATASET_RANDOM_CROP_SIZE[0] + 1, (1,)).item()
+    left = torch.randint(0, W - DATASET_RANDOM_CROP_SIZE[1] + 1, (1,)).item()
 
-    cropped_img = img[..., top:top + CROP_SIZE[0], left:left + CROP_SIZE[1]]
-    cropped_mask = mask[..., top:top + CROP_SIZE[0], left:left + CROP_SIZE[1]]
+    cropped_img = img[..., top:top + DATASET_RANDOM_CROP_SIZE[0],
+                      left:left + DATASET_RANDOM_CROP_SIZE[1]]
+    cropped_mask = mask[..., top:top + DATASET_RANDOM_CROP_SIZE[0],
+                        left:left + DATASET_RANDOM_CROP_SIZE[1]]
     return (cropped_img, cropped_mask)
 
 
 def save_tensor_as_png(tensor_img: torch.Tensor, tensor_mask: torch.Tensor, png_path: Path, out_dir_img: Path, out_dir_mask: Path, aug_name: str):
-    transform = transforms.Resize(
-        RESIZE, interpolation=transforms.InterpolationMode.BILINEAR)
-    tensor_img = transform(tensor_img)
-    tensor_mask = transform(tensor_mask)
+    img_transform = transforms.Resize(
+        DATASET_LOWRES_RESIZE, interpolation=transforms.InterpolationMode.BILINEAR)
+    mask_transform = transforms.Resize(
+        DATASET_LOWRES_RESIZE, interpolation=transforms.InterpolationMode.NEAREST)
+    tensor_img = img_transform(tensor_img)
+    tensor_mask = mask_transform(tensor_mask)
 
     aug_suffix = f"_{aug_name}" if aug_name else ""
     out_file_name = F"{png_path.name.replace('.png', '')}{aug_suffix}.png"
@@ -121,14 +129,14 @@ def main():
     set_seeds()
 
     raw_data_dir = Path(RAW_DATA_DIR)
-    raw_images_dir = raw_data_dir / "images_4096"
-    raw_masks_dir = raw_data_dir / "masks_4096"
+    raw_images_dir = raw_data_dir / HIGHRES_IMG_DIR_NAME
+    raw_masks_dir = raw_data_dir / HIGHRES_MASK_DIR_NAME
 
     dataset_dir = Path(DATASETS_DIR) / DATASET_NAME
-    train_dir_images = dataset_dir / "train" / f"images_{RESIZE[0]}"
-    train_dir_masks = dataset_dir / "train" / f"masks_{RESIZE[0]}"
-    test_dir_images = dataset_dir / "test" / f"images_{RESIZE[0]}"
-    test_dir_masks = dataset_dir / "test" / f"masks_{RESIZE[0]}"
+    train_dir_images = dataset_dir / "train" / LOWRES_IMG_DIR_NAME
+    train_dir_masks = dataset_dir / "train" / LOWRES_MASK_DIR_NAME
+    test_dir_images = dataset_dir / "test" / LOWRES_IMG_DIR_NAME
+    test_dir_masks = dataset_dir / "test" / LOWRES_MASK_DIR_NAME
 
     if dataset_dir.exists():
         shutil.rmtree(dataset_dir)
@@ -170,10 +178,10 @@ def main():
              torch.rot90(mask_tensor, k=2, dims=(-2, -1)), "rot180"),
             (torch.rot90(img_tensor, k=3, dims=(-2, -1)),
              torch.rot90(mask_tensor, k=3, dims=(-2, -1)), "rot270"),
-            (img_tensor.clamp(1e-6, 1.0).pow(random.uniform(*(0.6, 1.4))),
+            (img_tensor.clamp(1e-6, 1.0).pow(random.uniform(*DATASET_GAMMA_RANGE)),
              mask_tensor, "gamma"),
             ((img_tensor + torch.randn_like(img_tensor) *
-              GAUSSIAN_NOISE).clamp(0.0, 1.0), mask_tensor, "gaussiannoise"),
+              DATASET_GAUSSIAN_NOISE).clamp(0.0, 1.0), mask_tensor, "gaussiannoise"),
             (img_tensor_griddistort, mask_tensor_griddistort, "griddistort")
         ]
 

@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import numpy as np
 from PIL import Image
@@ -5,27 +6,37 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 
-RAW_DATA_DIR = "C:\\Users\\juhe9\\repos\\MasterThesis\\ForkSight\\Segmentation\\Data"
+from .env_utils import load_as_tuple, load_segmentation_env
 
-input_folder = Path(RAW_DATA_DIR) / "sam3_output"
-output_zip_path = input_folder / "cvat_annotations.zip"
+load_segmentation_env()
+
+RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
+SAM3_OUTPUT_DIR_NAME = os.getenv("SAM3_OUTPUT_DIR_NAME", "sam3_output")
+
+if not RAW_DATA_DIR:
+    raise ValueError("RAW_DATA_DIR environment variable is not set.")
+
+CVAT_BACKGROUND_COLOR = load_as_tuple("CVAT_BACKGROUND_COLOR", "0,0,0", int)
+CVAT_MASK_COLOR = load_as_tuple("CVAT_MASK_COLOR", "250,50,83", int)
+
+sam3_output_dir = Path(RAW_DATA_DIR) / SAM3_OUTPUT_DIR_NAME
+output_zip_path = sam3_output_dir / f"cvat_annotations_{datetime.now().strftime(" % Y % m % d_ % H % M % S")}.zip"
 
 color_map = {
-    0: (0, 0, 0),       # background
-    255: (250, 50, 83)  # DNA
+    0: CVAT_BACKGROUND_COLOR,   # background
+    255: CVAT_MASK_COLOR        # DNA
 }
 
 with zipfile.ZipFile(output_zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
 
-    labelmap_content = """# label:color_rgb:parts:actions
-DNA:250,50,83::
-background:0,0,0::
+    labelmap_content = f"""# label:color_rgb:parts:actions
+DNA:{','.join(map(str, CVAT_MASK_COLOR))}::
+background:{','.join(map(str, CVAT_BACKGROUND_COLOR))}::
 """
     zipf.writestr("labelmap.txt", labelmap_content)
 
     filenames = []
-
-    for img_path in input_folder.glob("*.png"):
+    for img_path in sam3_output_dir.glob("*.png"):
         img = Image.open(str(img_path))
         arr = np.array(img)
 

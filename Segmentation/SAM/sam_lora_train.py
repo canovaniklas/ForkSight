@@ -18,34 +18,57 @@ from PIL import Image
 from matplotlib import pyplot as plt
 import wandb
 
-USE_WANDB = True
+from ..Util.env_utils import load_as, load_as_bool, load_segmentation_env
 
-FINETUNE_IMAGE_ENCODER = False
-FINETUNE_MASK_DECODER = True
-FINETUNE_PROMPT_ENCODER = True
+load_segmentation_env()
 
-MODEL_CHECKPOINTS_DIR = "/home/jhehli/data/model_checkpoints/"
+SEED = load_as("SEED", int, 42)
 
-# TRAIN_IMAGES_DIR = Path(
-#    "/home/jhehli/data/datasets/SAM_LoRA_Augmented/train/images/")
-# TRAIN_MASKS_DIR = Path("/home/jhehli/data/datasets/SAM_LoRA_Augmented/train/masks/")
-# TEST_IMAGES_DIR = Path("/home/jhehli/data/datasets/SAM_LoRA_Augmented/test/images/")
-# TEST_MASKS_DIR = Path("/home/jhehli/data/datasets/SAM_LoRA_Augmented/test/masks/")
+MODEL_CHECKPOINTS_DIR = os.getenv("MODEL_CHECKPOINTS_DIR")
+MODEL_OUT_DIR = os.getenv("MODEL_OUT_DIR")
+DATASETS_DIR = os.getenv("DATASETS_DIR")
 
-TRAIN_IMAGES_DIR = Path(
-    "/home/jhehli/data/datasets/SAM_LoRA_Augmented/train/images_256/")
-TRAIN_MASKS_DIR = Path(
-    "/home/jhehli/data/datasets/SAM_LoRA_Augmented/train/masks_256/")
-TEST_IMAGES_DIR = Path(
-    "/home/jhehli/data/datasets/SAM_LoRA_Augmented/test/images_256/")
-TEST_MASKS_DIR = Path(
-    "/home/jhehli/data/datasets/SAM_LoRA_Augmented/test/masks_256/")
-LR = 0.001
-NUM_CLASSES = 1  # binary segmentation (DNA vs background)
-BATCH_SIZE = 8
-MAX_EPOCHS = 200
+DATASET_NAME = os.getenv("DATASET_NAME", "SAM_LoRA_Augmented")
 
-UPSAMPLE_LOWRES_LOGITS = None  # set to None to disable upsampling
+LOWRES_IMG_DIR_NAME = os.getenv("LOWRES_IMG_DIR_NAME", "images_1024")
+LOWRES_MASK_DIR_NAME = os.getenv("LOWRES_MASK_DIR_NAME", "masks_1024")
+CROPPED_AUG_IMG_DIR_NAME = os.getenv("CROPPED_AUG_IMG_DIR_NAME", "images_256")
+CROPPED_AUG_MASK_DIR_NAME = os.getenv("CROPPED_AUG_MASK_DIR_NAME", "masks_256")
+
+USE_WANDB = load_as_bool("USE_WANDB", True)
+WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
+WANDB_PROJECT = os.getenv("WANDB_PROJECT", "ForkSight-SAM")
+WANDB_API_KEY = os.getenv("WANDB_API_KEY")
+
+SAM_LORA_USE_CROPPED_IMAGES = load_as_bool(
+    "SAM_LORA_USE_CROPPED_IMAGES", True)
+SAM_LORA_FINETUNE_IMAGE_ENCODER = load_as_bool(
+    "SAM_LORA_FINETUNE_IMAGE_ENCODER", False)
+SAM_LORA_FINETUNE_MASK_DECODER = load_as_bool(
+    "SAM_LORA_FINETUNE_MASK_DECODER", True)
+SAM_LORA_FINETUNE_PROMPT_ENCODER = load_as_bool(
+    "SAM_LORA_FINETUNE_PROMPT_ENCODER", True)
+
+SAM_LORA_LR = load_as("SAM_LORA_LR", float, 1e-3)
+SAM_LORA_NUM_CLASSES = load_as("SAM_LORA_NUM_CLASSES", int, 1)
+SAM_LORA_BATCH_SIZE = load_as("SAM_LORA_BATCH_SIZE", int, 2)
+SAM_LORA_MAX_EPOCHS = load_as("SAM_LORA_MAX_EPOCHS", int, 150)
+# set to None to disable upsampling
+SAM_LORA_UPSAMPLE_LOWRES_LOGITS = os.getenv(
+    "SAM_LORA_UPSAMPLE_LOWRES_LOGITS") or None
+SAM_LORA_MODEL_TYPE = os.getenv("SAM_LORA_MODEL_TYPE", "vit_b")
+SAM_LORA_MODEL_CHECKPOINT = os.getenv(
+    "SAM_LORA_MODEL_CHECKPOINT", "sam_vit_b_01ec64")
+SAM_LORA_RANK = load_as("SAM_LORA_RANK", int, 4)
+
+if MODEL_CHECKPOINTS_DIR is None or DATASETS_DIR is None or MODEL_OUT_DIR is None:
+    raise ValueError(
+        "MODEL_CHECKPOINTS_DIR, DATASETS_DIR, and MODEL_OUT_DIR environment variables must be set.")
+
+TRAIN_IMAGES_DIR = Path(DATASETS_DIR) / DATASET_NAME / "train" / (
+    CROPPED_AUG_IMG_DIR_NAME if SAM_LORA_USE_CROPPED_IMAGES else LOWRES_IMG_DIR_NAME)
+TRAIN_MASKS_DIR = Path(DATASETS_DIR) / DATASET_NAME / "train" / (
+    CROPPED_AUG_MASK_DIR_NAME if SAM_LORA_USE_CROPPED_IMAGES else LOWRES_MASK_DIR_NAME)
 
 
 class SegmentationDataset(Dataset):
@@ -94,7 +117,7 @@ class BCEWithLogitsDiceLoss(nn.Module):
 
         self.bce = nn.BCEWithLogitsLoss(reduction='none')
         self.dice_weight = dice_weight
-        self.upsample_lowres_logits = UPSAMPLE_LOWRES_LOGITS
+        self.upsample_lowres_logits = SAM_LORA_UPSAMPLE_LOWRES_LOGITS
 
     def forward(self, low_res_logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
@@ -108,7 +131,7 @@ class BCEWithLogitsDiceLoss(nn.Module):
 
         targets = targets.to(device=low_res_logits.device, dtype=torch.float32)
         targets_resized = F.interpolate(targets, size=(
-            low_res_logits.shape[-2], low_res_logits.shape[-1]), mode='bilinear', align_corners=False)
+            low_res_logits.shape[-2], low_res_logits.shape[-1]), mode='nearest', align_corners=False)
 
         # --- cross entropy term ---
         pixel_bce = self.bce(low_res_logits, targets_resized)
@@ -116,13 +139,6 @@ class BCEWithLogitsDiceLoss(nn.Module):
         bce_loss = sample_bce.mean()
 
         # --- dice term ---
-        # masks_flat = masks.view(masks.shape[0], -1).float()
-        # targets_flat = targets.view(targets.shape[0], -1).float()
-        # intersection = (masks_flat * targets_flat).sum(dim=1)
-        # cardinality = masks_flat.sum(dim=1) + targets_flat.sum(dim=1)
-        # dice_score = (2.0 * intersection + self.smooth) / \
-        #    (cardinality + self.smooth)
-        # dice_loss = (1.0 - dice_score).mean()
         masks_prob = torch.sigmoid(low_res_logits)
         masks_flat = masks_prob.view(masks_prob.shape[0], -1)
         targets_flat = targets_resized.view(targets_resized.shape[0], -1)
@@ -157,34 +173,36 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
     curr_datetime = datetime.now(
         ZoneInfo("Europe/Zurich")).strftime("%Y%m%d_%H%M%S")
 
-    architecture_suffixes = []
-    if FINETUNE_IMAGE_ENCODER:
-        architecture_suffixes.append("image_encoder")
-    if FINETUNE_MASK_DECODER:
-        architecture_suffixes.append("mask_decoder")
-    if FINETUNE_PROMPT_ENCODER:
-        architecture_suffixes.append("prompt_encoder")
+    finetuned_modules = []
+    if SAM_LORA_FINETUNE_IMAGE_ENCODER:
+        finetuned_modules.append("image_encoder")
+    if SAM_LORA_FINETUNE_MASK_DECODER:
+        finetuned_modules.append("mask_decoder")
+    if SAM_LORA_FINETUNE_PROMPT_ENCODER:
+        finetuned_modules.append("prompt_encoder")
 
     base_training_images = get_base_training_images()
 
     return wandb.init(
-        # Set the wandb entity where your project will be logged (generally your team name).
-        entity="EM_IMCR_BIOVSION",
-        # Set the wandb project where this run will be logged.
-        project="ForkSight-SAM",
+        entity=WANDB_ENTITY,
+        project=WANDB_PROJECT,
         name=f"SAM_LoRA_Finetuning_{curr_datetime}",
-        # Track hyperparameters and run metadata.
         config={
-            "learning_rate": LR,
-            "architecture": f"SAM LoRA ({', '.join(architecture_suffixes)})",
-            "dataset": f"lowres custom segmentation dataset (training set size: {trainset_len}, validation set size: {valset_len})",
+            "learning_rate": SAM_LORA_LR,
+            "SAM_checkpoint": SAM_LORA_MODEL_CHECKPOINT,
+            "LoRA_rank": SAM_LORA_RANK,
+            "finetuned_modules": str(finetuned_modules),
+            "dataset": f"{DATASET_NAME}",
+            "use_cropped_images": SAM_LORA_USE_CROPPED_IMAGES,
+            "train_set_size": trainset_len,
+            "val_set_size": valset_len,
             "num_base_training_images": len(base_training_images),
             "base_training_images": str(base_training_images),
-            "epochs": MAX_EPOCHS,
-            "batch_size": BATCH_SIZE,
-            "num_classes": NUM_CLASSES,
+            "epochs": SAM_LORA_MAX_EPOCHS,
+            "batch_size": SAM_LORA_BATCH_SIZE,
+            "num_classes": SAM_LORA_NUM_CLASSES,
             "trainable_parameters": trainable_params_count,
-            "upsample_lowres_logits": str(UPSAMPLE_LOWRES_LOGITS),
+            "upsample_lowres_logits": str(SAM_LORA_UPSAMPLE_LOWRES_LOGITS),
         },
     )
 
@@ -193,42 +211,23 @@ def init_model(device: torch.device) -> SamLoRA:
     print(
         f"using python: {sys.executable}, {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}\n")
 
-    sam_checkpoint = str(Path(MODEL_CHECKPOINTS_DIR) / "sam_vit_b_01ec64.pth")
-    model_type = "vit_b"
+    sam_checkpoint = str(Path(MODEL_CHECKPOINTS_DIR) /
+                         f"{SAM_LORA_MODEL_CHECKPOINT}.pth")
+    model_type = SAM_LORA_MODEL_TYPE
     sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
     sam.to(device)
 
     print(
         f"SAM model loaded on {sam.device}, with {sum(p.numel() for p in sam.parameters() if p.requires_grad)} trainable parameters")
 
-    sam_lora = SamLoRA(sam, r=4, finetune_img_encoder=FINETUNE_IMAGE_ENCODER,
-                       finetune_mask_decoder=FINETUNE_MASK_DECODER, finetune_prompt_encoder=FINETUNE_PROMPT_ENCODER)
+    sam_lora = SamLoRA(sam, r=SAM_LORA_RANK, finetune_img_encoder=SAM_LORA_FINETUNE_IMAGE_ENCODER,
+                       finetune_mask_decoder=SAM_LORA_FINETUNE_MASK_DECODER, finetune_prompt_encoder=SAM_LORA_FINETUNE_PROMPT_ENCODER)
     sam_lora.to(device)
+
     print(
         f"SAM model with LoRA fine-tuning initialized, on {sam_lora.device}, with {sum(p.numel() for p in sam_lora.parameters() if p.requires_grad)} trainable parameters")
-    # print(sam_lora)
 
     return sam_lora
-
-
-def save_mask(img, mask, idx=0):
-    mask = mask.cpu().numpy()
-    img = img.cpu().numpy().transpose(1, 2, 0)
-
-    color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
-
-    fig = plt.figure(figsize=(10, 10))
-    plt.axis('off')
-
-    plt.imshow(img)
-
-    h, w = mask.shape[-2:]
-    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-    plt.gca().imshow(mask_image)
-
-    plt.tight_layout()
-    fig.tight_layout()
-    fig.savefig(f"sam_lora_output_{idx}.png")
 
 
 def get_batched_input_list(batched_input: torch.Tensor):
@@ -257,9 +256,9 @@ def train():
     val_sampler = SubsetRandomSampler(val_indices)
 
     trainloader = DataLoader(
-        dataset, batch_size=BATCH_SIZE, sampler=train_sampler)
+        dataset, batch_size=SAM_LORA_BATCH_SIZE, sampler=train_sampler)
     validationloader = DataLoader(
-        dataset, batch_size=BATCH_SIZE, sampler=val_sampler)
+        dataset, batch_size=SAM_LORA_BATCH_SIZE, sampler=val_sampler)
 
     loss_fn = BCEWithLogitsDiceLoss()
 
@@ -274,16 +273,16 @@ def train():
 
     optimizer = torch.optim.AdamW(
         params=[p for _, p in trainable_params],
-        lr=LR
+        lr=SAM_LORA_LR,
     )
 
     if USE_WANDB:
-        wandb.login(key="aa4147e2bb5f0315cc9f35b6475561223915112c")
+        wandb.login(key=WANDB_API_KEY)
         wandb_run = init_wandb_run(len(train_indices), len(
             val_indices), sum(p.numel() for _, p in trainable_params))
 
-    for epoch in range(MAX_EPOCHS):
-        print(f"\nEpoch {epoch+1}/{MAX_EPOCHS}")
+    for epoch in range(SAM_LORA_MAX_EPOCHS):
+        print(f"\nEpoch {epoch+1}/{SAM_LORA_MAX_EPOCHS}")
 
         # training
         sam_lora.train()
@@ -296,7 +295,7 @@ def train():
 
             optimizer.zero_grad()
             outputs = sam_lora(batched_input=batched_input,
-                               multimask_output=NUM_CLASSES > 1)
+                               multimask_output=SAM_LORA_NUM_CLASSES > 1)
             output_logits = torch.cat([d["low_res_logits"]
                                       for d in outputs], dim=0)
 
@@ -317,7 +316,7 @@ def train():
                 batched_input = get_batched_input_list(batched_input)
 
                 outputs = sam_lora(batched_input=batched_input,
-                                   multimask_output=NUM_CLASSES > 1)
+                                   multimask_output=SAM_LORA_NUM_CLASSES > 1)
                 output_logits = torch.cat([d["low_res_logits"]
                                           for d in outputs], dim=0)
 
@@ -342,19 +341,19 @@ def train():
 
     curr_datetime = datetime.now(
         ZoneInfo("Europe/Zurich")).strftime("%Y%m%d_%H%M%S")
-    torch.save(trainable_params,
-               f"SavedModels/sam_lora_finetuned_params_{curr_datetime}.pt")
+    model_out_filename = f"sam_lora_finetuned_params_{curr_datetime}.pt"
+    model_out_path = str(Path(MODEL_OUT_DIR) / model_out_filename)
+
+    torch.save(trainable_params, model_out_path)
 
     if USE_WANDB and wandb_run is not None:
-        artifact = wandb.Artifact(
-            name=f"sam_lora_finetuned_params_{curr_datetime}", type="model")
-        artifact.add_file(
-            f"SavedModels/sam_lora_finetuned_params_{curr_datetime}.pt")
+        artifact = wandb.Artifact(name=model_out_filename, type="model")
+        artifact.add_file(model_out_path)
         wandb_run.log_artifact(artifact)
 
         wandb_run.finish()
 
 
 if __name__ == "__main__":
-    seed_everything(42)
+    seed_everything(SEED)
     train()

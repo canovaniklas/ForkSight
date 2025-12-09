@@ -1,9 +1,16 @@
+import os
 from pathlib import Path
 from PIL import Image
 import shutil
 import numpy as np
 
-RAW_DATA_DIR = "C:\\Users\\juhe9\\repos\\MasterThesis\\ForkSight\\Segmentation\\Data"
+from .env_utils import load_segmentation_env
+
+load_segmentation_env()
+
+RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
+HIGHRES_IMG_DIR_NAME = os.getenv("HIGHRES_IMG_DIR_NAME", "images_4096")
+
 IN_IMAGES = [
     "Z:\\imcrdata\\2024_Andrea_ETP_R2\\20240911_Andrea_Black\\LayersData\\highmag\\Tile Set (14)\\Tile_007-004-000000_0-000.tif",
     "Z:\\imcrdata\\2024_Andrea_NBS1\\2024_Andrea_NBS1_R1\\20240523_Andrea_Orange\\LayersData\\highmag\\Tile Set (17)\\Tile_016-003-000000_0-000.tif",
@@ -60,11 +67,13 @@ def normalize_convert_uint8(img: Image.Image) -> Image.Image:
 
 
 def main():
-    out_dir_path = Path(RAW_DATA_DIR) / "images_4096"
-    img_paths = [Path(p) for p in IN_IMAGES]
+    if RAW_DATA_DIR is None:
+        raise RuntimeError("RAW_DATA_DIR environment variable not set")
 
+    out_dir_path = Path(RAW_DATA_DIR) / HIGHRES_IMG_DIR_NAME
     init_folder(out_dir_path)
 
+    img_paths = [Path(p) for p in IN_IMAGES]
     for img_path in img_paths:
         try:
             img = Image.open(img_path)
