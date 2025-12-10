@@ -311,8 +311,8 @@ def train():
 
     if USE_WANDB and WANDB_TEST and wandb_run is not None:
         wandb_run.log({
-            "train/loss": mean_training_loss,
-            "validation/loss": mean_validation_loss,
+            "train/loss": 0.123,
+            "validation/loss": 0.987,
         })
         test_params = {"test_param": torch.randn(2, 2)}
         save_params(test_params, wandb_run)
