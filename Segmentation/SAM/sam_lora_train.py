@@ -259,7 +259,7 @@ def save_params(params: dict[str, torch.Tensor], wandb_run, filename=None):
         artifact = wandb.Artifact(name=model_out_path.stem, type="model")
         artifact.add_file(str(model_out_path))
         print(
-            f"Saving fine-tuned model parameters {str(model_out_path)}to wandb artifact '{model_out_path.stem}'")
+            f"Saving fine-tuned model parameters {str(model_out_path)} to wandb artifact '{model_out_path.stem}'")
         print(artifact)
         wandb_run.log_artifact(artifact)
 
@@ -310,6 +310,10 @@ def train():
             val_indices), sum(p.numel() for _, p in trainable_params))
 
     if USE_WANDB and WANDB_TEST and wandb_run is not None:
+        wandb_run.log({
+            "train/loss": mean_training_loss,
+            "validation/loss": mean_validation_loss,
+        })
         test_params = {"test_param": torch.randn(2, 2)}
         save_params(test_params, wandb_run, filename="wandb_test_artifact.pt")
         print("wandb test artifact created, exiting.")
