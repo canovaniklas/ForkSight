@@ -5,7 +5,6 @@ import sys
 from zoneinfo import ZoneInfo
 import re
 
-from sam_lora import SamLoRA
 from segment_anything import sam_model_registry
 import numpy as np
 import torch
@@ -15,10 +14,10 @@ from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
 import torchvision.transforms as transforms
 from pathlib import Path
 from PIL import Image
-from matplotlib import pyplot as plt
 import wandb
 
-from ..Util.env_utils import load_as, load_as_bool, load_segmentation_env
+from Segmentation.SAM.sam_lora import SamLoRA
+from Segmentation.Util.env_utils import load_as, load_as_bool, load_segmentation_env
 
 load_segmentation_env()
 
@@ -257,9 +256,11 @@ def save_params(params: dict[str, torch.Tensor], wandb_run, filename=None):
     torch.save(params, str(model_out_path))
 
     if USE_WANDB and wandb_run is not None:
-        artifact_type = "test" if WANDB_TEST else "model"
-        artifact = wandb.Artifact(name=model_out_path.stem, type=artifact_type)
+        artifact = wandb.Artifact(name=model_out_path.stem, type="model")
         artifact.add_file(str(model_out_path))
+        print(
+            f"Saving fine-tuned model parameters {str(model_out_path)}to wandb artifact '{model_out_path.stem}'")
+        print(artifact)
         wandb_run.log_artifact(artifact)
 
 
@@ -314,7 +315,7 @@ def train():
         print("wandb test artifact created, exiting.")
 
         wandb_run.finish()
-        sys.exit(0)
+        return
 
     for epoch in range(SAM_LORA_MAX_EPOCHS):
         print(f"\nEpoch {epoch+1}/{SAM_LORA_MAX_EPOCHS}")
