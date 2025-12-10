@@ -15,7 +15,6 @@ import torchvision.transforms as transforms
 from pathlib import Path
 from PIL import Image
 import wandb
-import time
 
 from Segmentation.SAM.sam_lora import SamLoRA
 from Segmentation.Util.env_utils import load_as, load_as_bool, load_segmentation_env
@@ -36,7 +35,6 @@ CROPPED_AUG_IMG_DIR_NAME = os.getenv("CROPPED_AUG_IMG_DIR_NAME", "images_256")
 CROPPED_AUG_MASK_DIR_NAME = os.getenv("CROPPED_AUG_MASK_DIR_NAME", "masks_256")
 
 USE_WANDB = load_as_bool("USE_WANDB", True)
-WANDB_TEST = load_as_bool("WANDB_TEST", False)
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
 WANDB_PROJECT = os.getenv("WANDB_PROJECT", "ForkSight-SAM")
 WANDB_API_KEY = os.getenv("WANDB_API_KEY")
@@ -79,6 +77,9 @@ TRAIN_IMAGES_DIR = Path(DATASETS_DIR) / DATASET_NAME / "train" / (
     CROPPED_AUG_IMG_DIR_NAME if SAM_LORA_USE_CROPPED_IMAGES else LOWRES_IMG_DIR_NAME)
 TRAIN_MASKS_DIR = Path(DATASETS_DIR) / DATASET_NAME / "train" / (
     CROPPED_AUG_MASK_DIR_NAME if SAM_LORA_USE_CROPPED_IMAGES else LOWRES_MASK_DIR_NAME)
+
+RUN_DATETIME_STR = datetime.now(
+    ZoneInfo("Europe/Zurich")).strftime("%Y%m%d_%H%M%S")
 
 
 class SegmentationDataset(Dataset):
@@ -162,6 +163,35 @@ class BCEWithLogitsDiceLoss(nn.Module):
         return (1.0 - self.dice_weight) * bce_loss + self.dice_weight * dice_loss
 
 
+import numpy as np
+import torch
+
+
+class EarlyStopping:
+    def __init__(self, patience=5, min_delta=0.0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.lowest_loss = None
+        self.counter = 0
+        self.early_stop = False
+
+    def __call__(self, current_loss: float) -> bool:
+        if self.lowest_loss is None:
+            self.lowest_loss = current_loss
+            return False
+
+        if (self.lowest_loss - current_loss) > self.min_delta:
+            self.lowest_loss = current_loss
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+                print("Early stopping triggered (lowest loss: {:.4f})".format(
+                    self.lowest_loss))
+        return self.early_stop
+
+
 def seed_everything(seed: int):
     random.seed(seed)
     np.random.seed(seed)
@@ -180,9 +210,6 @@ def get_base_training_images():
 
 
 def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: int):
-    curr_datetime = datetime.now(
-        ZoneInfo("Europe/Zurich")).strftime("%Y%m%d_%H%M%S")
-
     finetuned_modules = []
     if SAM_LORA_FINETUNE_IMAGE_ENCODER:
         finetuned_modules.append("image_encoder")
@@ -196,7 +223,7 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
     return wandb.init(
         entity=WANDB_ENTITY,
         project=WANDB_PROJECT,
-        name=f"SAM_LoRA_Finetuning_{curr_datetime}",
+        name=f"SAM_LoRA_Finetuning_{RUN_DATETIME_STR}",
         config={
             "learning_rate": SAM_LORA_LR,
             "SAM_checkpoint": SAM_LORA_MODEL_CHECKPOINT,
@@ -247,21 +274,27 @@ def get_batched_input_list(batched_input: torch.Tensor):
     } for img in batched_input.unbind(0)]
 
 
-def save_params(params: dict[str, torch.Tensor], wandb_run):
-    curr_datetime = datetime.now(
-        ZoneInfo("Europe/Zurich")).strftime("%Y%m%d_%H%M%S")
-    filename = f"sam_lora_finetuned_params_{curr_datetime}.pt"
+def save_params(sam_lora: SamLoRA, wandb_run, epoch: int = None, suffix=""):
+    params = {name: p.detach().cpu() for name,
+              p in sam_lora.named_parameters() if p.requires_grad}
 
-    # model_out_path = Path(MODEL_OUT_DIR) / filename
-    torch.save(params, filename)
+    epoch_suffix = f"_epoch{epoch}" if epoch is not None else "_final"
+    filename = f"params_{epoch_suffix}{suffix}.pt"
+    run_dirname = wandb_run.name.lower(
+    ) if wandb_run is not None else f"sam_lora_finetuning_{RUN_DATETIME_STR}"
+
+    model_out_dir = Path(MODEL_OUT_DIR) / run_dirname
+    model_out_dir.mkdir(parents=True, exist_ok=True)
+
+    torch.save(params, str(model_out_dir / filename))
 
     if USE_WANDB and wandb_run is not None:
-        artifact = wandb.Artifact(name=filename, type="model")
-        artifact.add_file(local_path=filename)
-        print(
-            f"Saving fine-tuned model parameters {filename} to wandb artifact '{filename}'")
-        wandb_run.log_artifact(artifact)
-    time.sleep(10)
+        try:
+            artifact = wandb.Artifact(name=filename, type="model")
+            artifact.add_file(local_path=filename)
+            wandb_run.log_artifact(artifact)
+        except Exception as e:
+            print(f"Failed to log artifact to wandb: {e}")
 
 
 def train():
@@ -309,18 +342,8 @@ def train():
         wandb_run = init_wandb_run(len(train_indices), len(
             val_indices), sum(p.numel() for _, p in trainable_params))
 
-    if USE_WANDB and WANDB_TEST and wandb_run is not None:
-        wandb_run.log({
-            "train/loss": mean_training_loss,
-            "validation/loss": mean_validation_loss,
-        })
-        test_params = {"test_param": torch.randn(2, 2)}
-        save_params(test_params, wandb_run)
-        wandb_run.finish()
-        
-        print("wandb test artifact created, exiting.")
-
-        return
+    min_validation_loss = float('inf')
+    early_stopping = EarlyStopping(patience=5, min_delta=5e-4)
 
     for epoch in range(SAM_LORA_MAX_EPOCHS):
         print(f"\nEpoch {epoch+1}/{SAM_LORA_MAX_EPOCHS}")
@@ -370,6 +393,16 @@ def train():
         print(f"    Train Loss: {mean_training_loss:.4f}")
         print(f"    Validation Loss: {mean_validation_loss:.4f}")
 
+        if mean_validation_loss < min_validation_loss:
+            min_validation_loss = mean_validation_loss
+            print("    New minimum validation loss achieved, saving model parameters")
+            save_params(sam_lora, wandb_run, epoch=epoch + 1)
+
+        if early_stopping(mean_validation_loss):
+            save_params(sam_lora, wandb_run, epoch=epoch +
+                        1, suffix="_earlystop")
+            break
+
         if USE_WANDB and wandb_run is not None:
             wandb_run.log({
                 "train/loss": mean_training_loss,
@@ -377,9 +410,7 @@ def train():
             })
 
     # save the fine-tuned model parameters
-    trainable_params = {name: p.detach().cpu() for name,
-                        p in sam_lora.named_parameters() if p.requires_grad}
-    save_params(trainable_params, wandb_run)
+    save_params(sam_lora, wandb_run)
 
     if USE_WANDB and wandb_run is not None:
         wandb_run.finish()
