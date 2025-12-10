@@ -9,9 +9,12 @@
 
 set -euo pipefail
 
+# navigate to the repository root
+cd "$(dirname "$0")/../.."
+
 # load and export environment variables
 set -a
-source ../.env
+source ./Segmentation/.env
 set +a
 
 # create directories for wandb and logs
@@ -35,4 +38,4 @@ srun -l bash -lc 'echo CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES; nvidia-smi; \
 python -c "import torch; print(\"CUDA available:\", torch.cuda.is_available()); \
 print(\"Device 0:\", torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\")"'
 
-srun python -u sam_lora_train.py
+srun python -m Segmentation.SAM.sam_lora_train
