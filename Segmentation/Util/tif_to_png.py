@@ -4,7 +4,7 @@ from PIL import Image
 import shutil
 import numpy as np
 
-from .env_utils import load_segmentation_env
+from Segmentation.Util.env_utils import load_segmentation_env
 
 load_segmentation_env()
 

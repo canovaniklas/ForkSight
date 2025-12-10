@@ -8,7 +8,7 @@ from PIL import Image
 import torch
 import torchvision.transforms as transforms
 
-from .env_utils import load_as, load_as_tuple, load_segmentation_env
+from Segmentation.Util.env_utils import load_as, load_as_tuple, load_segmentation_env
 
 load_segmentation_env()
 

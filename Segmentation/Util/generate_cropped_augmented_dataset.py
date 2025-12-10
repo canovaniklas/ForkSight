@@ -4,7 +4,7 @@ import shutil
 import torchvision.transforms.functional as F
 from PIL import Image
 
-from .env_utils import load_segmentation_env
+from Segmentation.Util.env_utils import load_segmentation_env
 
 load_segmentation_env()
 
@@ -64,9 +64,9 @@ for base_dir in base_dirs:
     init_folder(cropped_masks_dir)
 
     for png_file in images_dir.glob("*.png"):
-        print(f"Cropping image patches from image {png_file.name}...")
+        print(f"Cropping image patches from image {png_file.name}")
         crop_image_grid(png_file, cropped_images_dir)
 
     for png_file in masks_dir.glob("*.png"):
-        print(f"Cropping mask patches from mask {png_file.name}...")
+        print(f"Cropping mask patches from mask {png_file.name}")
         crop_image_grid(png_file, cropped_masks_dir)
