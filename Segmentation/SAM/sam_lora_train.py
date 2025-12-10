@@ -15,6 +15,7 @@ import torchvision.transforms as transforms
 from pathlib import Path
 from PIL import Image
 import wandb
+import time
 
 from Segmentation.SAM.sam_lora import SamLoRA
 from Segmentation.Util.env_utils import load_as, load_as_bool, load_segmentation_env
@@ -246,22 +247,21 @@ def get_batched_input_list(batched_input: torch.Tensor):
     } for img in batched_input.unbind(0)]
 
 
-def save_params(params: dict[str, torch.Tensor], wandb_run, filename=None):
-    if filename is None:
-        curr_datetime = datetime.now(
-            ZoneInfo("Europe/Zurich")).strftime("%Y%m%d_%H%M%S")
-        filename = f"sam_lora_finetuned_params_{curr_datetime}.pt"
+def save_params(params: dict[str, torch.Tensor], wandb_run):
+    curr_datetime = datetime.now(
+        ZoneInfo("Europe/Zurich")).strftime("%Y%m%d_%H%M%S")
+    filename = f"sam_lora_finetuned_params_{curr_datetime}.pt"
 
-    model_out_path = Path(MODEL_OUT_DIR) / filename
-    torch.save(params, str(model_out_path))
+    # model_out_path = Path(MODEL_OUT_DIR) / filename
+    torch.save(params, filename)
 
     if USE_WANDB and wandb_run is not None:
-        artifact = wandb.Artifact(name=model_out_path.stem, type="model")
-        artifact.add_file(str(model_out_path))
+        artifact = wandb.Artifact(name=filename, type="model")
+        artifact.add_file(local_path=filename)
         print(
-            f"Saving fine-tuned model parameters {str(model_out_path)} to wandb artifact '{model_out_path.stem}'")
-        print(artifact)
+            f"Saving fine-tuned model parameters {filename} to wandb artifact '{filename}'")
         wandb_run.log_artifact(artifact)
+    time.sleep(10)
 
 
 def train():
@@ -315,10 +315,11 @@ def train():
             "validation/loss": mean_validation_loss,
         })
         test_params = {"test_param": torch.randn(2, 2)}
-        save_params(test_params, wandb_run, filename="wandb_test_artifact.pt")
+        save_params(test_params, wandb_run)
+        wandb_run.finish()
+        
         print("wandb test artifact created, exiting.")
 
-        wandb_run.finish()
         return
 
     for epoch in range(SAM_LORA_MAX_EPOCHS):
