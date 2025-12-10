@@ -142,7 +142,7 @@ class BCEWithLogitsDiceLoss(nn.Module):
 
         targets = targets.to(device=low_res_logits.device, dtype=torch.float32)
         targets_resized = F.interpolate(targets, size=(
-            low_res_logits.shape[-2], low_res_logits.shape[-1]), mode='nearest', align_corners=False)
+            low_res_logits.shape[-2], low_res_logits.shape[-1]), mode='nearest')
 
         # --- cross entropy term ---
         pixel_bce = self.bce(low_res_logits, targets_resized)
@@ -274,24 +274,26 @@ def get_batched_input_list(batched_input: torch.Tensor):
     } for img in batched_input.unbind(0)]
 
 
-def save_params(sam_lora: SamLoRA, wandb_run, epoch: int = None, suffix=""):
+def save_params(sam_lora: SamLoRA, wandb_run, suffix: str = None):
     params = {name: p.detach().cpu() for name,
               p in sam_lora.named_parameters() if p.requires_grad}
 
-    epoch_suffix = f"_epoch{epoch}" if epoch is not None else "_final"
-    filename = f"params_{epoch_suffix}{suffix}.pt"
+    suffix = f"_{suffix}" if suffix else ""
+    filename = f"params{suffix}.pt"
     run_dirname = wandb_run.name.lower(
     ) if wandb_run is not None else f"sam_lora_finetuning_{RUN_DATETIME_STR}"
 
     model_out_dir = Path(MODEL_OUT_DIR) / run_dirname
     model_out_dir.mkdir(parents=True, exist_ok=True)
 
-    torch.save(params, str(model_out_dir / filename))
+    filepath = str(model_out_dir / filename)
+    torch.save(params, filepath)
 
     if USE_WANDB and wandb_run is not None:
         try:
-            artifact = wandb.Artifact(name=filename, type="model")
-            artifact.add_file(local_path=filename)
+            artifact = wandb.Artifact(
+                name=filename.replace(".pt", ""), type="model")
+            artifact.add_file(local_path=filepath)
             wandb_run.log_artifact(artifact)
         except Exception as e:
             print(f"Failed to log artifact to wandb: {e}")
@@ -396,11 +398,10 @@ def train():
         if mean_validation_loss < min_validation_loss:
             min_validation_loss = mean_validation_loss
             print("    New minimum validation loss achieved, saving model parameters")
-            save_params(sam_lora, wandb_run, epoch=epoch + 1)
+            save_params(sam_lora, wandb_run, "minloss")
 
         if early_stopping(mean_validation_loss):
-            save_params(sam_lora, wandb_run, epoch=epoch +
-                        1, suffix="_earlystop")
+            save_params(sam_lora, wandb_run, "earlystop")
             break
 
         if USE_WANDB and wandb_run is not None:
@@ -410,7 +411,7 @@ def train():
             })
 
     # save the fine-tuned model parameters
-    save_params(sam_lora, wandb_run)
+    save_params(sam_lora, wandb_run, "final")
 
     if USE_WANDB and wandb_run is not None:
         wandb_run.finish()
