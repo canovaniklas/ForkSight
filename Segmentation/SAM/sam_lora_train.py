@@ -36,6 +36,7 @@ CROPPED_AUG_IMG_DIR_NAME = os.getenv("CROPPED_AUG_IMG_DIR_NAME", "images_256")
 CROPPED_AUG_MASK_DIR_NAME = os.getenv("CROPPED_AUG_MASK_DIR_NAME", "masks_256")
 
 USE_WANDB = load_as_bool("USE_WANDB", True)
+WANDB_TEST = load_as_bool("WANDB_TEST", False)
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
 WANDB_PROJECT = os.getenv("WANDB_PROJECT", "ForkSight-SAM")
 WANDB_API_KEY = os.getenv("WANDB_API_KEY")
@@ -64,6 +65,15 @@ SAM_LORA_RANK = load_as("SAM_LORA_RANK", int, 4)
 if MODEL_CHECKPOINTS_DIR is None or DATASETS_DIR is None or MODEL_OUT_DIR is None:
     raise ValueError(
         "MODEL_CHECKPOINTS_DIR, DATASETS_DIR, and MODEL_OUT_DIR environment variables must be set.")
+if not Path(MODEL_CHECKPOINTS_DIR).is_dir():
+    raise ValueError(
+        f"MODEL_CHECKPOINTS_DIR '{MODEL_CHECKPOINTS_DIR}' is not a valid directory.")
+if not Path(DATASETS_DIR).is_dir():
+    raise ValueError(
+        f"DATASETS_DIR '{DATASETS_DIR}' is not a valid directory.")
+if not Path(MODEL_OUT_DIR).is_dir():
+    raise ValueError(
+        f"MODEL_OUT_DIR '{MODEL_OUT_DIR}' is not a valid directory.")
 
 TRAIN_IMAGES_DIR = Path(DATASETS_DIR) / DATASET_NAME / "train" / (
     CROPPED_AUG_IMG_DIR_NAME if SAM_LORA_USE_CROPPED_IMAGES else LOWRES_IMG_DIR_NAME)
@@ -237,6 +247,22 @@ def get_batched_input_list(batched_input: torch.Tensor):
     } for img in batched_input.unbind(0)]
 
 
+def save_params(params: dict[str, torch.Tensor], wandb_run, filename=None):
+    if filename is None:
+        curr_datetime = datetime.now(
+            ZoneInfo("Europe/Zurich")).strftime("%Y%m%d_%H%M%S")
+        filename = f"sam_lora_finetuned_params_{curr_datetime}.pt"
+
+    model_out_path = Path(MODEL_OUT_DIR) / filename
+    torch.save(params, str(model_out_path))
+
+    if USE_WANDB and wandb_run is not None:
+        artifact_type = "test" if WANDB_TEST else "model"
+        artifact = wandb.Artifact(name=model_out_path.stem, type=artifact_type)
+        artifact.add_file(str(model_out_path))
+        wandb_run.log_artifact(artifact)
+
+
 def train():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     sam_lora = init_model(device)
@@ -276,10 +302,19 @@ def train():
         lr=SAM_LORA_LR,
     )
 
+    wandb_run = None
     if USE_WANDB:
         wandb.login(key=WANDB_API_KEY)
         wandb_run = init_wandb_run(len(train_indices), len(
             val_indices), sum(p.numel() for _, p in trainable_params))
+
+    if USE_WANDB and WANDB_TEST and wandb_run is not None:
+        test_params = {"test_param": torch.randn(2, 2)}
+        save_params(test_params, wandb_run, filename="wandb_test_artifact.pt")
+        print("wandb test artifact created, exiting.")
+
+        wandb_run.finish()
+        sys.exit(0)
 
     for epoch in range(SAM_LORA_MAX_EPOCHS):
         print(f"\nEpoch {epoch+1}/{SAM_LORA_MAX_EPOCHS}")
@@ -338,19 +373,9 @@ def train():
     # save the fine-tuned model parameters
     trainable_params = {name: p.detach().cpu() for name,
                         p in sam_lora.named_parameters() if p.requires_grad}
-
-    curr_datetime = datetime.now(
-        ZoneInfo("Europe/Zurich")).strftime("%Y%m%d_%H%M%S")
-    model_out_filename = f"sam_lora_finetuned_params_{curr_datetime}.pt"
-    model_out_path = str(Path(MODEL_OUT_DIR) / model_out_filename)
-
-    torch.save(trainable_params, model_out_path)
+    save_params(trainable_params, wandb_run)
 
     if USE_WANDB and wandb_run is not None:
-        artifact = wandb.Artifact(name=model_out_filename, type="model")
-        artifact.add_file(model_out_path)
-        wandb_run.log_artifact(artifact)
-
         wandb_run.finish()
 
 
