@@ -60,6 +60,10 @@ SAM_LORA_MODEL_CHECKPOINT = os.getenv(
     "SAM_LORA_MODEL_CHECKPOINT", "sam_vit_b_01ec64")
 SAM_LORA_RANK = load_as("SAM_LORA_RANK", int, 4)
 
+EARLY_STOPPING_PATIENCE = load_as("EARLY_STOPPING_PATIENCE", int, 15)
+EARLY_STOPPING_DELTA = load_as("EARLY_STOPPING_DELTA", float, 0.005)
+EARLY_STOPPING_MIN_EPOCHS = load_as("EARLY_STOPPING_MIN_EPOCHS", int, 50)
+
 if MODEL_CHECKPOINTS_DIR is None or DATASETS_DIR is None or MODEL_OUT_DIR is None:
     raise ValueError(
         "MODEL_CHECKPOINTS_DIR, DATASETS_DIR, and MODEL_OUT_DIR environment variables must be set.")
@@ -168,14 +172,19 @@ import torch
 
 
 class EarlyStopping:
-    def __init__(self, patience=5, min_delta=0.0):
+    def __init__(self, patience=5, min_delta=0.0, min_epochs=0):
         self.patience = patience
         self.min_delta = min_delta
+        self.min_epochs = min_epochs
+
         self.lowest_loss = None
         self.counter = 0
         self.early_stop = False
 
-    def __call__(self, current_loss: float) -> bool:
+    def __call__(self, current_loss: float, epoch: int) -> bool:
+        if epoch < self.min_epochs:
+            return False
+
         if self.lowest_loss is None:
             self.lowest_loss = current_loss
             return False
@@ -345,7 +354,8 @@ def train():
             val_indices), sum(p.numel() for _, p in trainable_params))
 
     min_validation_loss = float('inf')
-    early_stopping = EarlyStopping(patience=5, min_delta=5e-4)
+    early_stopping = EarlyStopping(
+        patience=EARLY_STOPPING_PATIENCE, min_delta=EARLY_STOPPING_DELTA, min_epochs=EARLY_STOPPING_MIN_EPOCHS)
 
     for epoch in range(SAM_LORA_MAX_EPOCHS):
         print(f"\nEpoch {epoch+1}/{SAM_LORA_MAX_EPOCHS}")
@@ -400,15 +410,14 @@ def train():
             print("    New minimum validation loss achieved, saving model parameters")
             save_params(sam_lora, wandb_run, "minloss")
 
-        if early_stopping(mean_validation_loss):
-            save_params(sam_lora, wandb_run, "earlystop")
-            break
-
         if USE_WANDB and wandb_run is not None:
             wandb_run.log({
                 "train/loss": mean_training_loss,
                 "validation/loss": mean_validation_loss,
             })
+
+        if early_stopping(mean_validation_loss, epoch):
+            break
 
     # save the fine-tuned model parameters
     save_params(sam_lora, wandb_run, "final")

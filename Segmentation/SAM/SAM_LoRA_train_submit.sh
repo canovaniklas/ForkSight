@@ -6,11 +6,14 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=40G
 #SBATCH --time=24:00:00
+#SBATCH --output=/home/jhehli/scratch/logs/%x-%j.out
+#SBATCH --error=/home/jhehli/scratch/logs/%x-%j.err
 
 set -euo pipefail
 
 # navigate to the repository root
-cd "$(dirname "$0")/../.."
+cd /home/jhehli/data/ForkSight
+echo "Current working directory: $(pwd)"
 
 # load and export environment variables
 set -a
@@ -18,13 +21,11 @@ source ./Segmentation/.env
 set +a
 
 # create directories for wandb and logs
+BASE_DIR="/scratch/jhehli"
+export WANDB_DIR="${BASE_DIR}/wandb"
+export LOG_DIR="${BASE_DIR}/logs"
+
 mkdir -p "$WANDB_DIR" "$LOG_DIR"
-
-# redirect stdout and stderr to log files, because env variables cannot be used in SBATCH --output and --error
-exec > >(tee "$LOG_DIR/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out") \
-     2> >(tee "$LOG_DIR/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.err" >&2)
-
-echo "Logs going into: $LOG_DIR/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.*"
 
 echo "wandb dir: $WANDB_DIR"
 echo "log dir: $LOG_DIR"
