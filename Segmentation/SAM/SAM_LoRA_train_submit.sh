@@ -39,4 +39,4 @@ srun -l bash -lc 'echo CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES; nvidia-smi; \
 python -c "import torch; print(\"CUDA available:\", torch.cuda.is_available()); \
 print(\"Device 0:\", torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"CPU\")"'
 
-srun python -m Segmentation.SAM.sam_lora_train
+srun python -u -m Segmentation.SAM.sam_lora_train

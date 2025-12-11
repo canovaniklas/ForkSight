@@ -298,14 +298,14 @@ def save_params(sam_lora: SamLoRA, wandb_run, suffix: str = None):
     filepath = str(model_out_dir / filename)
     torch.save(params, filepath)
 
-    if USE_WANDB and wandb_run is not None:
-        try:
-            artifact = wandb.Artifact(
-                name=filename.replace(".pt", ""), type="model")
-            artifact.add_file(local_path=filepath)
-            wandb_run.log_artifact(artifact)
-        except Exception as e:
-            print(f"Failed to log artifact to wandb: {e}")
+    #if USE_WANDB and wandb_run is not None:
+    #    try:
+    #        artifact = wandb.Artifact(
+    #            name=filename.replace(".pt", ""), type="model")
+    #        artifact.add_file(local_path=filepath)
+    #        wandb_run.log_artifact(artifact)
+    #    except Exception as e:
+    #        print(f"Failed to log artifact to wandb: {e}")
 
 
 def train():
