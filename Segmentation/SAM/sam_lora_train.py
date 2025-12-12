@@ -266,6 +266,8 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
     with open(str(run_out_dir / "wandb_run_id.txt"), "w") as f:
         f.write(run.id)
 
+    return run
+
 
 def init_model(device: torch.device) -> SamLoRA:
     print(
@@ -412,6 +414,7 @@ def train():
 
         print(f"    Train Loss: {mean_training_loss:.4f}")
         print(f"    Validation Loss: {mean_validation_loss:.4f}")
+        print(f"    Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
 
         if mean_validation_loss < min_validation_loss:
             min_validation_loss = mean_validation_loss
@@ -422,7 +425,7 @@ def train():
             wandb_run.log({
                 "train/loss": mean_training_loss,
                 "validation/loss": mean_validation_loss,
-                "scheduler/lr": scheduler.get_last_lr()[0],
+                "learning_rate": scheduler.get_last_lr()[0],
             })
 
         if early_stopping(mean_validation_loss, epoch):
