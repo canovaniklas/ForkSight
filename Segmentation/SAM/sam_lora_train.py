@@ -218,6 +218,16 @@ def get_base_training_images():
     return [f for f in train_image_filenames if pattern.match(f)]
 
 
+def get_init_run_out_dir(wandb_run):
+    run_dirname = wandb_run.name.lower(
+    ) if wandb_run is not None else f"sam_lora_finetuning_{RUN_DATETIME_STR}"
+
+    run_out_dir = Path(MODEL_OUT_DIR) / run_dirname
+    run_out_dir.mkdir(parents=True, exist_ok=True)
+
+    return run_out_dir
+
+
 def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: int):
     finetuned_modules = []
     if SAM_LORA_FINETUNE_IMAGE_ENCODER:
@@ -229,7 +239,7 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
 
     base_training_images = get_base_training_images()
 
-    return wandb.init(
+    run = wandb.init(
         entity=WANDB_ENTITY,
         project=WANDB_PROJECT,
         name=f"SAM_LoRA_Finetuning_{RUN_DATETIME_STR}",
@@ -251,6 +261,10 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "upsample_lowres_logits": str(SAM_LORA_UPSAMPLE_LOWRES_LOGITS),
         },
     )
+
+    run_out_dir = get_init_run_out_dir(run)
+    with open(str(run_out_dir / "wandb_run_id.txt"), "w") as f:
+        f.write(run.id)
 
 
 def init_model(device: torch.device) -> SamLoRA:
@@ -289,23 +303,10 @@ def save_params(sam_lora: SamLoRA, wandb_run, suffix: str = None):
 
     suffix = f"_{suffix}" if suffix else ""
     filename = f"params{suffix}.pt"
-    run_dirname = wandb_run.name.lower(
-    ) if wandb_run is not None else f"sam_lora_finetuning_{RUN_DATETIME_STR}"
+    run_out_dir = get_init_run_out_dir(wandb_run)
+    filepath = str(run_out_dir / filename)
 
-    model_out_dir = Path(MODEL_OUT_DIR) / run_dirname
-    model_out_dir.mkdir(parents=True, exist_ok=True)
-
-    filepath = str(model_out_dir / filename)
     torch.save(params, filepath)
-
-    #if USE_WANDB and wandb_run is not None:
-    #    try:
-    #        artifact = wandb.Artifact(
-    #            name=filename.replace(".pt", ""), type="model")
-    #        artifact.add_file(local_path=filepath)
-    #        wandb_run.log_artifact(artifact)
-    #    except Exception as e:
-    #        print(f"Failed to log artifact to wandb: {e}")
 
 
 def train():
