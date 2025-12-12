@@ -348,15 +348,21 @@ def train():
         lr=SAM_LORA_LR,
     )
 
+    steps_per_epoch = len(trainloader)
+    total_steps = steps_per_epoch * SAM_LORA_MAX_EPOCHS
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=SAM_LORA_LR, total_steps=total_steps, pct_start=0.3, anneal_strategy="cos"
+    )
+
+    min_validation_loss = float('inf')
+    early_stopping = EarlyStopping(
+        patience=EARLY_STOPPING_PATIENCE, min_delta=EARLY_STOPPING_DELTA, min_epochs=EARLY_STOPPING_MIN_EPOCHS)
+
     wandb_run = None
     if USE_WANDB:
         wandb.login(key=WANDB_API_KEY)
         wandb_run = init_wandb_run(len(train_indices), len(
             val_indices), sum(p.numel() for _, p in trainable_params))
-
-    min_validation_loss = float('inf')
-    early_stopping = EarlyStopping(
-        patience=EARLY_STOPPING_PATIENCE, min_delta=EARLY_STOPPING_DELTA, min_epochs=EARLY_STOPPING_MIN_EPOCHS)
 
     for epoch in range(SAM_LORA_MAX_EPOCHS):
         print(f"\nEpoch {epoch+1}/{SAM_LORA_MAX_EPOCHS}")
@@ -381,6 +387,7 @@ def train():
 
             loss.backward()
             optimizer.step()
+            scheduler.step()
 
         # validation
         sam_lora.eval()
@@ -415,6 +422,7 @@ def train():
             wandb_run.log({
                 "train/loss": mean_training_loss,
                 "validation/loss": mean_validation_loss,
+                "scheduler/lr": scheduler.get_last_lr()[0],
             })
 
         if early_stopping(mean_validation_loss, epoch):
