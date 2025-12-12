@@ -35,7 +35,8 @@ for run_dir in Path(MODEL_OUT_DIR).iterdir():
         print(f"    could not find run {run_id} via API: {e}, skipping")
         continue
 
-    existing_artifacts = [a.name for a in api_run.logged_artifacts()]
+    existing_artifacts = [a.name.replace(":v0", "")
+                          for a in api_run.logged_artifacts()]
     print(f"    Run {run_id} has existing artifacts: {existing_artifacts}")
 
     for param_file in run_dir.glob("*.pt"):
