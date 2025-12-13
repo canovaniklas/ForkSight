@@ -59,6 +59,7 @@ SAM_LORA_MODEL_TYPE = os.getenv("SAM_LORA_MODEL_TYPE", "vit_b")
 SAM_LORA_MODEL_CHECKPOINT = os.getenv(
     "SAM_LORA_MODEL_CHECKPOINT", "sam_vit_b_01ec64")
 SAM_LORA_RANK = load_as("SAM_LORA_RANK", int, 4)
+SAM_LORA_SCHEDULER_TYPE = os.getenv("SAM_LORA_SCHEDULER_TYPE", "OneCycleLR")
 
 EARLY_STOPPING_PATIENCE = load_as("EARLY_STOPPING_PATIENCE", int, 15)
 EARLY_STOPPING_DELTA = load_as("EARLY_STOPPING_DELTA", float, 0.005)
@@ -330,7 +331,7 @@ def train():
     val_sampler = SubsetRandomSampler(val_indices)
 
     trainloader = DataLoader(
-        dataset, batch_size=SAM_LORA_BATCH_SIZE, sampler=train_sampler)
+        dataset, batch_size=SAM_LORA_BATCH_SIZE, sampler=train_sampler, drop_last=True)
     validationloader = DataLoader(
         dataset, batch_size=SAM_LORA_BATCH_SIZE, sampler=val_sampler)
 
@@ -352,9 +353,13 @@ def train():
 
     steps_per_epoch = len(trainloader)
     total_steps = steps_per_epoch * SAM_LORA_MAX_EPOCHS
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=SAM_LORA_LR, total_steps=total_steps, pct_start=0.3, anneal_strategy="cos"
-    )
+    scheduler = None
+    if SAM_LORA_SCHEDULER_TYPE == "OneCycleLR":
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer, max_lr=SAM_LORA_LR, total_steps=total_steps, pct_start=0.1, anneal_strategy="cos", div_factor=10.0, final_div_factor=10.0)
+    elif SAM_LORA_SCHEDULER_TYPE == "CosineAnnealingLR":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=total_steps, eta_min=0.0001)
 
     min_validation_loss = float('inf')
     early_stopping = EarlyStopping(
@@ -388,8 +393,13 @@ def train():
             total_training_loss += loss.item() * len(batched_input)
 
             loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(sam_lora.parameters(), max_norm=1.0)
+
             optimizer.step()
-            scheduler.step()
+            
+            if scheduler is not None:
+                scheduler.step()
 
         # validation
         sam_lora.eval()
