@@ -3,21 +3,18 @@ import os
 import random
 import sys
 from zoneinfo import ZoneInfo
-import re
 
 from segment_anything import sam_model_registry
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
-import torchvision.transforms as transforms
+from torch.utils.data import DataLoader, SubsetRandomSampler
 from pathlib import Path
-from PIL import Image
 import wandb
 
 from Segmentation.SAM.sam_lora import SamLoRA
+from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, BCEWithLogitsDiceLoss, SegmentationDataset, evaluate_model, get_batched_input_list, add_metrics
 from Segmentation.Util.env_utils import load_as, load_as_bool, load_segmentation_env
+from Segmentation.Util.dataset_util import get_base_images
 
 load_segmentation_env()
 
@@ -82,94 +79,13 @@ TRAIN_IMAGES_DIR = Path(DATASETS_DIR) / DATASET_NAME / "train" / (
     CROPPED_AUG_IMG_DIR_NAME if SAM_LORA_USE_CROPPED_IMAGES else LOWRES_IMG_DIR_NAME)
 TRAIN_MASKS_DIR = Path(DATASETS_DIR) / DATASET_NAME / "train" / (
     CROPPED_AUG_MASK_DIR_NAME if SAM_LORA_USE_CROPPED_IMAGES else LOWRES_MASK_DIR_NAME)
+TEST_IMAGES_DIR = Path(DATASETS_DIR) / DATASET_NAME / "test" / (
+    CROPPED_AUG_IMG_DIR_NAME if SAM_LORA_USE_CROPPED_IMAGES else LOWRES_IMG_DIR_NAME)
+TEST_MASKS_DIR = Path(DATASETS_DIR) / DATASET_NAME / "test" / (
+    CROPPED_AUG_MASK_DIR_NAME if SAM_LORA_USE_CROPPED_IMAGES else LOWRES_MASK_DIR_NAME)
 
 RUN_DATETIME_STR = datetime.now(
     ZoneInfo("Europe/Zurich")).strftime("%Y%m%d_%H%M%S")
-
-
-class SegmentationDataset(Dataset):
-    def __init__(self, images_dir: Path, masks_dir: Path):
-        self.image_paths = list(images_dir.glob("*.png"))
-        self.masks_dir = masks_dir
-
-    def _load_image(self, path: Path, is_mask: bool = False) -> torch.Tensor:
-        # using nearest neighbor interpolation for masks to preserve label values (no interpolation)
-        transform = transforms.Compose([transforms.Resize((1024, 1024), interpolation=(transforms.InterpolationMode.NEAREST if is_mask else transforms.InterpolationMode.BILINEAR)),
-                                        transforms.ToTensor()])
-
-        if not is_mask:
-            transform.transforms.append(transforms.Lambda(
-                lambda t: t.repeat(3, 1, 1) if t.shape[0] == 1 else t))
-
-        img = Image.open(path)
-        return transform(img)
-
-    def __len__(self):
-        return len(self.image_paths)
-
-    def __getitem__(self, idx):
-        image_path = self.image_paths[idx]
-        mask_path = self.masks_dir / image_path.name
-
-        image = self._load_image(image_path)
-        mask = self._load_image(mask_path, is_mask=True)
-
-        return image, mask
-
-
-class BCEWithLogitsDiceLoss(nn.Module):
-    """
-    Combined BCEWithLogits + Soft Dice loss for binary segmentation.
-
-    Args:
-      bce_weight: weight for the BCE loss term.
-      dice_weight: weight for the Dice loss term.
-      smooth: smoothing constant to avoid division by zero.
-      reduction: 'mean' or 'sum' for reduction over batch for final loss.
-    """
-
-    def __init__(self, dice_weight: float = 0.8):
-        super().__init__()
-
-        self.bce = nn.BCEWithLogitsLoss(reduction='none')
-        self.dice_weight = dice_weight
-        self.upsample_lowres_logits = SAM_LORA_UPSAMPLE_LOWRES_LOGITS
-
-    def forward(self, low_res_logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        """
-        masks: predicted masks logits, shape (B, 1, H_original, W_original)
-        low_res_logits: predicted low-res mask logits, shape (B, 1, H_lowres, W_lowres)
-        targets: binary 0/1, shape (B, 1, H_original, W_original)
-        """
-        if self.upsample_lowres_logits is not None:
-            low_res_logits = F.interpolate(
-                low_res_logits, size=self.upsample_lowres_logits, mode='bilinear', align_corners=False)
-
-        targets = targets.to(device=low_res_logits.device, dtype=torch.float32)
-        targets_resized = F.interpolate(targets, size=(
-            low_res_logits.shape[-2], low_res_logits.shape[-1]), mode='nearest')
-
-        # --- cross entropy term ---
-        pixel_bce = self.bce(low_res_logits, targets_resized)
-        sample_bce = pixel_bce.view(pixel_bce.shape[0], -1).mean(dim=1)
-        bce_loss = sample_bce.mean()
-
-        # --- dice term ---
-        masks_prob = torch.sigmoid(low_res_logits)
-        masks_flat = masks_prob.view(masks_prob.shape[0], -1)
-        targets_flat = targets_resized.view(targets_resized.shape[0], -1)
-
-        intersection = (masks_flat * targets_flat).sum(dim=1)
-        cardinality = masks_flat.sum(dim=1) + targets_flat.sum(dim=1)
-        dice_loss = (1 - (2 * intersection + 1e-6) /
-                     (cardinality + 1e-6)).mean()
-
-        # --- combined loss ---
-        return (1.0 - self.dice_weight) * bce_loss + self.dice_weight * dice_loss
-
-
-import numpy as np
-import torch
 
 
 class EarlyStopping:
@@ -212,13 +128,6 @@ def seed_everything(seed: int):
     os.environ["PYTHONHASHSEED"] = str(seed)
 
 
-def get_base_training_images():
-    ''' returns a list of names of unique base images in the training dataset, before augmentation. '''
-    train_image_filenames = [p.name for p in TRAIN_IMAGES_DIR.glob("*.png")]
-    pattern = re.compile(r'^[0-9]{8}.*_soi_[0-9]+_[^_]+\.png$')
-    return [f for f in train_image_filenames if pattern.match(f)]
-
-
 def get_init_run_out_dir(wandb_run):
     run_dirname = wandb_run.name.lower(
     ) if wandb_run is not None else f"sam_lora_finetuning_{RUN_DATETIME_STR}"
@@ -238,7 +147,7 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
     if SAM_LORA_FINETUNE_PROMPT_ENCODER:
         finetuned_modules.append("prompt_encoder")
 
-    base_training_images = get_base_training_images()
+    base_training_images = get_base_images(imgs_dir=TRAIN_IMAGES_DIR)
 
     run = wandb.init(
         entity=WANDB_ENTITY,
@@ -246,6 +155,7 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
         name=f"SAM_LoRA_Finetuning_{RUN_DATETIME_STR}",
         config={
             "learning_rate": SAM_LORA_LR,
+            "SAM_model_type": SAM_LORA_MODEL_TYPE,
             "SAM_checkpoint": SAM_LORA_MODEL_CHECKPOINT,
             "LoRA_rank": SAM_LORA_RANK,
             "finetuned_modules": str(finetuned_modules),
@@ -270,9 +180,10 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
     return run
 
 
-def init_model(device: torch.device) -> SamLoRA:
-    print(
-        f"using python: {sys.executable}, {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}\n")
+def init_model(device: torch.device, verbose: bool = True) -> SamLoRA:
+    if verbose:
+        print(
+            f"using python: {sys.executable}, {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}\n")
 
     sam_checkpoint = str(Path(MODEL_CHECKPOINTS_DIR) /
                          f"{SAM_LORA_MODEL_CHECKPOINT}.pth")
@@ -280,24 +191,19 @@ def init_model(device: torch.device) -> SamLoRA:
     sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
     sam.to(device)
 
-    print(
-        f"SAM model loaded on {sam.device}, with {sum(p.numel() for p in sam.parameters() if p.requires_grad)} trainable parameters")
+    if verbose:
+        print(
+            f"SAM model loaded on {sam.device}, with {sum(p.numel() for p in sam.parameters() if p.requires_grad)} trainable parameters")
 
     sam_lora = SamLoRA(sam, r=SAM_LORA_RANK, finetune_img_encoder=SAM_LORA_FINETUNE_IMAGE_ENCODER,
                        finetune_mask_decoder=SAM_LORA_FINETUNE_MASK_DECODER, finetune_prompt_encoder=SAM_LORA_FINETUNE_PROMPT_ENCODER)
     sam_lora.to(device)
 
-    print(
-        f"SAM model with LoRA fine-tuning initialized, on {sam_lora.device}, with {sum(p.numel() for p in sam_lora.parameters() if p.requires_grad)} trainable parameters")
+    if verbose:
+        print(
+            f"SAM model with LoRA fine-tuning initialized, on {sam_lora.device}, with {sum(p.numel() for p in sam_lora.parameters() if p.requires_grad)} trainable parameters")
 
     return sam_lora
-
-
-def get_batched_input_list(batched_input: torch.Tensor):
-    return [{
-        "image": img,
-        "original_size": (img.shape[1], img.shape[2])
-    } for img in batched_input.unbind(0)]
 
 
 def save_params(sam_lora: SamLoRA, wandb_run, suffix: str = None):
@@ -312,10 +218,7 @@ def save_params(sam_lora: SamLoRA, wandb_run, suffix: str = None):
     torch.save(params, filepath)
 
 
-def train():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    sam_lora = init_model(device)
-
+def init_data_loaders():
     dataset = SegmentationDataset(
         images_dir=TRAIN_IMAGES_DIR, masks_dir=TRAIN_MASKS_DIR)
 
@@ -335,13 +238,21 @@ def train():
     validationloader = DataLoader(
         dataset, batch_size=SAM_LORA_BATCH_SIZE, sampler=val_sampler)
 
-    loss_fn = BCEWithLogitsDiceLoss()
+    return trainloader, validationloader
 
-    trainable_params = [
+
+def get_trainable_params(sam_lora: SamLoRA):
+    return [
         (name, p) for name, p in sam_lora.named_parameters()
         if p.requires_grad
     ]
 
+
+def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, validationloader: DataLoader, device: torch.device):
+    loss_fn = BCEWithLogitsDiceLoss(
+        upsample_lowres_logits=SAM_LORA_UPSAMPLE_LOWRES_LOGITS)
+
+    trainable_params = get_trainable_params(sam_lora)
     for name, p in trainable_params:
         print(f"Training: {name} with {p.numel()} parameters")
     print()
@@ -364,12 +275,6 @@ def train():
     min_validation_loss = float('inf')
     early_stopping = EarlyStopping(
         patience=EARLY_STOPPING_PATIENCE, min_delta=EARLY_STOPPING_DELTA, min_epochs=EARLY_STOPPING_MIN_EPOCHS)
-
-    wandb_run = None
-    if USE_WANDB:
-        wandb.login(key=WANDB_API_KEY)
-        wandb_run = init_wandb_run(len(train_indices), len(
-            val_indices), sum(p.numel() for _, p in trainable_params))
 
     for epoch in range(SAM_LORA_MAX_EPOCHS):
         print(f"\nEpoch {epoch+1}/{SAM_LORA_MAX_EPOCHS}")
@@ -397,7 +302,7 @@ def train():
             torch.nn.utils.clip_grad_norm_(sam_lora.parameters(), max_norm=1.0)
 
             optimizer.step()
-            
+
             if scheduler is not None:
                 scheduler.step()
 
@@ -419,8 +324,9 @@ def train():
                 loss = loss_fn(output_logits, target_masks)
                 total_validation_loss += loss.item() * len(batched_input)
 
-        mean_training_loss = total_training_loss / len(train_indices)
-        mean_validation_loss = total_validation_loss / len(val_indices)
+        # epoch metrics
+        mean_training_loss = total_training_loss / len(trainloader)
+        mean_validation_loss = total_validation_loss / len(validationloader)
 
         print(f"    Train Loss: {mean_training_loss:.4f}")
         print(f"    Validation Loss: {mean_validation_loss:.4f}")
@@ -438,16 +344,51 @@ def train():
                 "learning_rate": scheduler.get_last_lr()[0],
             })
 
+        # early stopping
         if early_stopping(mean_validation_loss, epoch):
             break
 
-    # save the fine-tuned model parameters
     save_params(sam_lora, wandb_run, "final")
 
+
+def evaluate_checkpoints(wandb_run: wandb.Run, device: torch.device):
+    run_out_dir = get_init_run_out_dir(wandb_run)
+
+    for param_file in run_out_dir.glob("*.pt"):
+        print(
+            f"\nEvaluating model parameters from file: {str(param_file)}")
+
+        sam_lora = init_model(device, verbose=False)
+        params = torch.load(param_file, map_location=device)
+        sam_lora.load_state_dict(params, strict=False)
+
+        metrics = evaluate_model(sam_lora, TEST_IMAGES_DIR,
+                                 TEST_MASKS_DIR, device, param_file.stem)
+        for metric_name, metric_value in metrics.items():
+            print(f"        {metric_name}: {metric_value:.4f}")
+            add_metrics(wandb_run, metrics)
+
+    wandb_run.tags = list(set(wandb_run.tags) | {EVALUATED_TAG})
+
+
+def train_evaluate():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    sam_lora = init_model(device)
+    trainloader, validationloader = init_data_loaders()
+
+    wandb_run = None
+    if USE_WANDB:
+        wandb.login(key=WANDB_API_KEY)
+        wandb_run = init_wandb_run(len(trainloader), len(
+            validationloader), sum(p.numel() for _, p in get_trainable_params(sam_lora)))
+
+    train(sam_lora, wandb_run, trainloader, validationloader, device)
+
     if USE_WANDB and wandb_run is not None:
+        evaluate_checkpoints(wandb_run, device)
         wandb_run.finish()
 
 
 if __name__ == "__main__":
     seed_everything(SEED)
-    train()
+    train_evaluate()
