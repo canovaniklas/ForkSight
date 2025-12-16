@@ -13,7 +13,7 @@ import wandb
 
 from Segmentation.SAM.sam_lora import SamLoRA
 from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, BCEWithLogitsDiceLoss, SegmentationDataset, evaluate_model, get_batched_input_list, add_metrics
-from Segmentation.Util.env_utils import load_as, load_as_bool, load_segmentation_env
+from Segmentation.Util.env_utils import load_as, load_as_bool, load_as_tuple, load_segmentation_env
 from Segmentation.Util.dataset_util import get_base_images
 
 load_segmentation_env()
@@ -50,8 +50,8 @@ SAM_LORA_NUM_CLASSES = load_as("SAM_LORA_NUM_CLASSES", int, 1)
 SAM_LORA_BATCH_SIZE = load_as("SAM_LORA_BATCH_SIZE", int, 2)
 SAM_LORA_MAX_EPOCHS = load_as("SAM_LORA_MAX_EPOCHS", int, 150)
 # set to None to disable upsampling
-SAM_LORA_UPSAMPLE_LOWRES_LOGITS = os.getenv(
-    "SAM_LORA_UPSAMPLE_LOWRES_LOGITS") or None
+SAM_LORA_UPSAMPLE_LOWRES_LOGITS = load_as_tuple(
+    "SAM_LORA_UPSAMPLE_LOWRES_LOGITS", default=None, dtype=int)
 SAM_LORA_MODEL_TYPE = os.getenv("SAM_LORA_MODEL_TYPE", "vit_b")
 SAM_LORA_MODEL_CHECKPOINT = os.getenv(
     "SAM_LORA_MODEL_CHECKPOINT", "sam_vit_b_01ec64")
