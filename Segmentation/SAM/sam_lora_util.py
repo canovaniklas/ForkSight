@@ -35,8 +35,11 @@ class SegmentationDataset(Dataset):
 
     def _load_image(self, path: Path, is_mask: bool = False) -> torch.Tensor:
         # using nearest neighbor interpolation for masks to preserve label values (no interpolation)
-        transform = transforms.Compose([transforms.Resize((1024, 1024), interpolation=(transforms.InterpolationMode.NEAREST if is_mask else transforms.InterpolationMode.BILINEAR)),
-                                        transforms.ToTensor()])
+        transform = transforms.Compose([
+            #transforms.Resize((1024, 1024), interpolation=(
+            #    transforms.InterpolationMode.NEAREST if is_mask else transforms.InterpolationMode.BILINEAR)),
+            transforms.ToTensor()
+        ])
 
         if not is_mask:
             transform.transforms.append(transforms.Lambda(
