@@ -238,7 +238,7 @@ def init_data_loaders():
     validationloader = DataLoader(
         dataset, batch_size=SAM_LORA_BATCH_SIZE, sampler=val_sampler)
 
-    return trainloader, validationloader
+    return trainloader, validationloader, len(train_indices), len(val_indices)
 
 
 def get_trainable_params(sam_lora: SamLoRA):
@@ -325,8 +325,10 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                 total_validation_loss += loss.item() * len(batched_input)
 
         # epoch metrics
-        mean_training_loss = total_training_loss / len(trainloader)
-        mean_validation_loss = total_validation_loss / len(validationloader)
+        num_training_samples = len(trainloader) * trainloader.batch_size
+        mean_training_loss = total_training_loss / num_training_samples
+        num_validation_samples = len(validationloader) * validationloader.batch_size
+        mean_validation_loss = total_validation_loss / num_validation_samples
 
         print(f"    Train Loss: {mean_training_loss:.4f}")
         print(f"    Validation Loss: {mean_validation_loss:.4f}")
@@ -374,13 +376,13 @@ def evaluate_checkpoints(wandb_run: wandb.Run, device: torch.device):
 def train_evaluate():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     sam_lora = init_model(device)
-    trainloader, validationloader = init_data_loaders()
+    trainloader, validationloader, train_size, val_size = init_data_loaders()
 
     wandb_run = None
     if USE_WANDB:
         wandb.login(key=WANDB_API_KEY)
-        wandb_run = init_wandb_run(len(trainloader), len(
-            validationloader), sum(p.numel() for _, p in get_trainable_params(sam_lora)))
+        wandb_run = init_wandb_run(train_size, val_size, sum(
+            p.numel() for _, p in get_trainable_params(sam_lora)))
 
     train(sam_lora, wandb_run, trainloader, validationloader, device)
 

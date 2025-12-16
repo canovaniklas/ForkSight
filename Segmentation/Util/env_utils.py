@@ -23,7 +23,7 @@ def load_segmentation_env():
 
 def load_as_tuple(var: str, default=None, dtype=int) -> tuple:
     val = os.getenv(var, default)
-    if val is None:
+    if val is None or val.strip() == "":
         return None
     parts = val.strip().split(',')
     return tuple(dtype(p.strip()) for p in parts)
