@@ -51,3 +51,5 @@ Below is a table listing all needed environment parameters to run dataset prepar
 | EARLY_STOPPING_DELTA             | Minimum improvement considered progress                    |
 | EARLY_STOPPING_MIN_EPOCHS        | Minimum epochs before early stopping can activate          |
 | HUGGINGFACE_TOKEN                | Access token for Hugging Face models (keep private)        |
+| POSTPROCESSING_MIN_OBJ_SIZE      | Minimum size in pixels for objects in segmentation masks, smaller objects will be removed in postprocessing. If left empty, small objects won't be removed        |
+| POSTPROCESSING_CONNECT_DIAGONALLY      | A boolean that indicates whether pixels in segmentation masks that are connected diagonally are considered for connected features/elements        |

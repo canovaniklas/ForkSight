@@ -15,7 +15,7 @@ def load_segmentation_env():
     repo_root = find_repo_root()
     env_path = repo_root / "Segmentation" / ".env"
     if env_path.exists():
-        load_dotenv(dotenv_path=env_path)
+        load_dotenv(dotenv_path=env_path, override=True)
         print(f"loaded environment variables from: {env_path}")
     else:
         print(f".env file not found: {env_path} — using defaults")
@@ -29,6 +29,8 @@ def load_as_tuple(var: str, default=None, dtype=int) -> tuple:
 
 def load_as(var: str, dtype, default=None):
     val = os.getenv(var, default)
+    if val is None:
+        return None
     return dtype(val)
 
 

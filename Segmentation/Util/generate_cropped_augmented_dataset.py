@@ -46,7 +46,8 @@ def crop_image_grid(input_image_path: Path, output_dir: Path):
 
     for i, patch in enumerate(patches):
         patch_img = F.to_pil_image(patch)
-        patch_img.save(output_dir / f"{input_image_path.stem}_patch_{i}.png")
+        patch_img.save(
+            output_dir / f"{input_image_path.stem}_patch_{i:02d}.png")
 
 
 for base_dir in base_dirs:
