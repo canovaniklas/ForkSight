@@ -12,7 +12,7 @@ from pathlib import Path
 import wandb
 
 from Segmentation.SAM.sam_lora import SamLoRA
-from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, BCEWithLogitsDiceLoss, SegmentationDataset, evaluate_model, get_batched_input_list, add_metrics
+from Segmentation.SAM.sam_lora_util import BCEWithLogitsDiceLoss, SegmentationDataset, evaluate_model, get_batched_input_list
 from Segmentation.Util.env_utils import load_as, load_as_bool, load_as_tuple, load_segmentation_env
 from Segmentation.Util.dataset_util import get_base_images
 
@@ -28,16 +28,23 @@ DATASET_NAME = os.getenv("DATASET_NAME", "SAM_LoRA_Augmented")
 
 LOWRES_IMG_DIR_NAME = os.getenv("LOWRES_IMG_DIR_NAME", "images_1024")
 LOWRES_MASK_DIR_NAME = os.getenv("LOWRES_MASK_DIR_NAME", "masks_1024")
-LOWRES_IMG_PATCHES_DIR_NAME = os.getenv("LOWRES_IMG_PATCHES_DIR_NAME", "images_256")
-LOWRES_MASK_PATCHES_DIR_NAME = os.getenv("LOWRES_MASK_PATCHES_DIR_NAME", "masks_256")
+
+LOWRES_IMG_PATCHES_DIR_NAME = os.getenv(
+    "LOWRES_IMG_PATCHES_DIR_NAME", "img_patches_256")
+LOWRES_MASK_PATCHES_DIR_NAME = os.getenv(
+    "LOWRES_MASK_PATCHES_DIR_NAME", "mask_patches_256")
+HIGHRES_IMG_PATCHES_DIR_NAME = os.getenv(
+    "HIGHRES_IMG_PATCHES_DIR_NAME", "img_patches_1024")
+HIGHRES_MASK_PATCHES_DIR_NAME = os.getenv(
+    "HIGHRES_MASK_PATCHES_DIR_NAME", "mask_patches_1024")
 
 USE_WANDB = load_as_bool("USE_WANDB", True)
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
 WANDB_PROJECT = os.getenv("WANDB_PROJECT", "ForkSight-SAM")
 WANDB_API_KEY = os.getenv("WANDB_API_KEY")
 
-SAM_LORA_USE_CROPPED_IMAGES = load_as_bool(
-    "SAM_LORA_USE_CROPPED_IMAGES", True)
+SAM_LORA_INPUT_IMG_TYPE = os.getenv(
+    "SAM_LORA_INPUT_IMG_TYPE", "patches_lowres")
 SAM_LORA_FINETUNE_IMAGE_ENCODER = load_as_bool(
     "SAM_LORA_FINETUNE_IMAGE_ENCODER", False)
 SAM_LORA_FINETUNE_MASK_DECODER = load_as_bool(
@@ -62,6 +69,8 @@ EARLY_STOPPING_PATIENCE = load_as("EARLY_STOPPING_PATIENCE", int, 15)
 EARLY_STOPPING_DELTA = load_as("EARLY_STOPPING_DELTA", float, 0.005)
 EARLY_STOPPING_MIN_EPOCHS = load_as("EARLY_STOPPING_MIN_EPOCHS", int, 50)
 
+EVALUATED_TAG = "test-evaluated"
+
 if MODEL_CHECKPOINTS_DIR is None or DATASETS_DIR is None or MODEL_OUT_DIR is None:
     raise ValueError(
         "MODEL_CHECKPOINTS_DIR, DATASETS_DIR, and MODEL_OUT_DIR environment variables must be set.")
@@ -75,14 +84,24 @@ if not Path(MODEL_OUT_DIR).is_dir():
     raise ValueError(
         f"MODEL_OUT_DIR '{MODEL_OUT_DIR}' is not a valid directory.")
 
-TRAIN_IMAGES_DIR = Path(DATASETS_DIR) / DATASET_NAME / "train" / (
-    LOWRES_IMG_PATCHES_DIR_NAME if SAM_LORA_USE_CROPPED_IMAGES else LOWRES_IMG_DIR_NAME)
-TRAIN_MASKS_DIR = Path(DATASETS_DIR) / DATASET_NAME / "train" / (
-    LOWRES_MASK_PATCHES_DIR_NAME if SAM_LORA_USE_CROPPED_IMAGES else LOWRES_MASK_DIR_NAME)
-TEST_IMAGES_DIR = Path(DATASETS_DIR) / DATASET_NAME / "test" / (
-    LOWRES_IMG_PATCHES_DIR_NAME if SAM_LORA_USE_CROPPED_IMAGES else LOWRES_IMG_DIR_NAME)
-TEST_MASKS_DIR = Path(DATASETS_DIR) / DATASET_NAME / "test" / (
-    LOWRES_MASK_PATCHES_DIR_NAME if SAM_LORA_USE_CROPPED_IMAGES else LOWRES_MASK_DIR_NAME)
+train_dir = Path(DATASETS_DIR) / DATASET_NAME / "train"
+test_dir = Path(DATASETS_DIR) / DATASET_NAME / "test"
+if SAM_LORA_INPUT_IMG_TYPE == "patches_lowres":
+    TRAIN_IMAGES_DIR = train_dir / LOWRES_IMG_PATCHES_DIR_NAME
+    TRAIN_MASKS_DIR = train_dir / LOWRES_MASK_PATCHES_DIR_NAME
+    TEST_IMAGES_DIR = test_dir / LOWRES_IMG_PATCHES_DIR_NAME
+    TEST_MASKS_DIR = test_dir / LOWRES_MASK_PATCHES_DIR_NAME
+elif SAM_LORA_INPUT_IMG_TYPE == "patches_highres":
+    TRAIN_IMAGES_DIR = train_dir / HIGHRES_IMG_PATCHES_DIR_NAME
+    TRAIN_MASKS_DIR = train_dir / HIGHRES_MASK_PATCHES_DIR_NAME
+    TEST_IMAGES_DIR = test_dir / HIGHRES_IMG_PATCHES_DIR_NAME
+    TEST_MASKS_DIR = test_dir / HIGHRES_MASK_PATCHES_DIR_NAME
+elif SAM_LORA_INPUT_IMG_TYPE == "full_lowres":
+    TRAIN_IMAGES_DIR = train_dir / LOWRES_IMG_DIR_NAME
+    TRAIN_MASKS_DIR = train_dir / LOWRES_MASK_DIR_NAME
+    TEST_IMAGES_DIR = test_dir / LOWRES_IMG_DIR_NAME
+    TEST_MASKS_DIR = test_dir / LOWRES_MASK_DIR_NAME
+
 
 RUN_DATETIME_STR = datetime.now(
     ZoneInfo("Europe/Zurich")).strftime("%Y%m%d_%H%M%S")
@@ -160,7 +179,7 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "LoRA_rank": SAM_LORA_RANK,
             "finetuned_modules": str(finetuned_modules),
             "dataset": f"{DATASET_NAME}",
-            "use_cropped_images": SAM_LORA_USE_CROPPED_IMAGES,
+            "input_img_type": SAM_LORA_INPUT_IMG_TYPE,
             "train_set_size": trainset_len,
             "val_set_size": valset_len,
             "num_base_training_images": len(base_training_images),
@@ -327,7 +346,8 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         # epoch metrics
         num_training_samples = len(trainloader) * trainloader.batch_size
         mean_training_loss = total_training_loss / num_training_samples
-        num_validation_samples = len(validationloader) * validationloader.batch_size
+        num_validation_samples = len(
+            validationloader) * validationloader.batch_size
         mean_validation_loss = total_validation_loss / num_validation_samples
 
         print(f"    Train Loss: {mean_training_loss:.4f}")
@@ -368,7 +388,7 @@ def evaluate_checkpoints(wandb_run: wandb.Run, device: torch.device):
                                  TEST_MASKS_DIR, device, param_file.stem)
         for metric_name, metric_value in metrics.items():
             print(f"        {metric_name}: {metric_value:.4f}")
-            add_metrics(wandb_run, metrics)
+            wandb_run.summary[metric_name] = metric_value
 
     wandb_run.tags = list(set(wandb_run.tags) | {EVALUATED_TAG})
 

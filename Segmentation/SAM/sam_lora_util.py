@@ -1,31 +1,12 @@
 from pathlib import Path
-import re
-import wandb
-import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 from PIL import Image
-from segment_anything import sam_model_registry
 
 from Segmentation.SAM.sam_lora import SamLoRA
-from Segmentation.Util.env_utils import load_segmentation_env
-
-load_segmentation_env()
-
-MODEL_CHECKPOINTS_DIR = os.getenv("MODEL_CHECKPOINTS_DIR", "model_checkpoints")
-DATASETS_DIR = os.getenv("DATASETS_DIR")
-DATASET_NAME = os.getenv("DATASET_NAME", "SAM_LoRA_Augmented")
-LOWRES_IMG_PATCHES_DIR_NAME = os.getenv(
-    "LOWRES_IMG_PATCHES_DIR_NAME", "images_256")
-LOWRES_MASK_PATCHES_DIR_NAME = os.getenv("LOWRES_MASK_PATCHES_DIR_NAME", "masks_256")
-
-WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
-WANDB_PROJECT = os.getenv("WANDB_PROJECT", "ForkSight-SAM")
-
-EVALUATED_TAG = "test-evaluated"
 
 
 class SegmentationDataset(Dataset):
@@ -34,9 +15,9 @@ class SegmentationDataset(Dataset):
         self.masks_dir = masks_dir
 
     def _load_image(self, path: Path, is_mask: bool = False) -> torch.Tensor:
-        # using nearest neighbor interpolation for masks to preserve label values (no interpolation)
         transform = transforms.Compose([
-            #transforms.Resize((1024, 1024), interpolation=(
+            # using nearest neighbor interpolation for masks to preserve label values (no interpolation)
+            # transforms.Resize((1024, 1024), interpolation=(
             #    transforms.InterpolationMode.NEAREST if is_mask else transforms.InterpolationMode.BILINEAR)),
             transforms.ToTensor()
         ])
@@ -167,80 +148,3 @@ def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, de
     }
 
     return (metrics)
-
-
-def add_metrics(run: wandb.Run, metrics: dict):
-    for metric_name, metric_value in metrics.items():
-        run.summary[metric_name] = metric_value
-
-    run.tags = list(set(run.tags) | {EVALUATED_TAG})
-
-
-def initialize_sam_lora_with_params(wandb_run_config, params, device: torch.device) -> SamLoRA:
-    sam_checkpoint = str(Path(MODEL_CHECKPOINTS_DIR) /
-                         f"{wandb_run_config['SAM_checkpoint']}.pth")
-    sam = sam_model_registry[wandb_run_config["SAM_model_type"]](
-        checkpoint=sam_checkpoint)
-
-    sam.to(device)
-
-    finetune_img_encoder = "image_encoder" in wandb_run_config["finetuned_modules"]
-    finetune_mask_decoder = "mask_decoder" in wandb_run_config["finetuned_modules"]
-    finetune_prompt_encoder = "prompt_encoder" in wandb_run_config["finetuned_modules"]
-
-    sam_lora = SamLoRA(sam, r=wandb_run_config["LoRA_rank"], finetune_img_encoder=finetune_img_encoder,
-                       finetune_mask_decoder=finetune_mask_decoder, finetune_prompt_encoder=finetune_prompt_encoder)
-    sam_lora.to(device)
-
-    sam_lora.load_state_dict(params, strict=False)
-
-    return sam_lora
-
-
-def get_params_from_artifact(artifact: wandb.Artifact, device: torch.device):
-    pattern = re.compile(r"(params.*)")
-    match = pattern.search(artifact.name)
-    if match is None:
-        return None, None
-
-    artifact_dir = artifact.download()
-    ckpt_path = next(Path(artifact_dir).glob("*.pt"))
-    params = torch.load(ckpt_path, map_location=device)
-
-    return params, match.group(1).replace(":v0", "")
-
-
-def evaluate_missing_runs(device: torch.device):
-    test_imgs_dir = Path(DATASETS_DIR) / DATASET_NAME / \
-        "test" / LOWRES_IMG_PATCHES_DIR_NAME
-    test_masks_dir = Path(DATASETS_DIR) / DATASET_NAME / \
-        "test" / LOWRES_MASK_PATCHES_DIR_NAME
-
-    runs = wandb.Api().runs(
-        f"{WANDB_ENTITY}/{WANDB_PROJECT}")
-    runs = [run for run in runs if EVALUATED_TAG not in run.tags]
-
-    for run in runs:
-        print(f"\nEvaluating run: {run.name} ({run.id})")
-
-        model_param_artifacts = [a for a in list(
-            run.logged_artifacts()) if a.type == "model"]
-
-        for artifact in model_param_artifacts:
-            print(
-                f"    Evaluation on artifact: {artifact.name} ({artifact.id})")
-
-            params, params_name = get_params_from_artifact(artifact, device)
-            if params is None:
-                print("    Could not extract parameters from artifact")
-                continue
-
-            sam_lora = initialize_sam_lora_with_params(
-                run.config, params, device)
-
-            metrics = evaluate_model(sam_lora, test_imgs_dir,
-                                     test_masks_dir, device, params_name)
-            for metric_name, metric_value in metrics.items():
-                print(f"        {metric_name}: {metric_value:.4f}")
-            add_metrics(run, metrics)
-            run.update()

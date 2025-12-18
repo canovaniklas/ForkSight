@@ -39,7 +39,7 @@ Below is a table listing all needed environment parameters to run dataset prepar
 | SAM_LORA_FINETUNE_IMAGE_ENCODER  | Whether to fine-tune the image encoder                     |
 | SAM_LORA_FINETUNE_MASK_DECODER   | Whether to fine-tune the mask decoder                      |
 | SAM_LORA_FINETUNE_PROMPT_ENCODER | Whether to fine-tune the prompt encoder                    |
-| SAM_LORA_USE_CROPPED_IMAGES      | Whether to use cropped 256×256 images (cropped from resized images in a grid, so 1024x1024 images would result in 16 crops)                      |
+| SAM_LORA_INPUT_IMG_TYPE          | Which type of input images to use, one of: patches_lowres: use 256x256 low resolution patches, patches_highres: use 1024x1024 high resolution patches, full_lowres: use 1024x1024 low resolution FULL images                      |
 | SAM_LORA_LR                      | Learning rate                                              |
 | SAM_LORA_SCHEDULER_TYPE          | LR scheduler to use (OneCycleLR or CosineAnnealingLR)                                              |
 | SAM_LORA_NUM_CLASSES             | Number of segmentation classes, 1 for semantic segmentation (background/foreground)                             |
