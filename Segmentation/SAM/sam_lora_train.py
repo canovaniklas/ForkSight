@@ -87,16 +87,19 @@ if not Path(MODEL_OUT_DIR).is_dir():
 train_dir = Path(DATASETS_DIR) / DATASET_NAME / "train"
 test_dir = Path(DATASETS_DIR) / DATASET_NAME / "test"
 if SAM_LORA_INPUT_IMG_TYPE == "patches_lowres":
+    INPUT_IMG_SIZE = (256, 256)
     TRAIN_IMAGES_DIR = train_dir / LOWRES_IMG_PATCHES_DIR_NAME
     TRAIN_MASKS_DIR = train_dir / LOWRES_MASK_PATCHES_DIR_NAME
     TEST_IMAGES_DIR = test_dir / LOWRES_IMG_PATCHES_DIR_NAME
     TEST_MASKS_DIR = test_dir / LOWRES_MASK_PATCHES_DIR_NAME
 elif SAM_LORA_INPUT_IMG_TYPE == "patches_highres":
+    INPUT_IMG_SIZE = (1024, 1024)
     TRAIN_IMAGES_DIR = train_dir / HIGHRES_IMG_PATCHES_DIR_NAME
     TRAIN_MASKS_DIR = train_dir / HIGHRES_MASK_PATCHES_DIR_NAME
     TEST_IMAGES_DIR = test_dir / HIGHRES_IMG_PATCHES_DIR_NAME
     TEST_MASKS_DIR = test_dir / HIGHRES_MASK_PATCHES_DIR_NAME
 elif SAM_LORA_INPUT_IMG_TYPE == "full_lowres":
+    INPUT_IMG_SIZE = (1024, 1024)
     TRAIN_IMAGES_DIR = train_dir / LOWRES_IMG_DIR_NAME
     TRAIN_MASKS_DIR = train_dir / LOWRES_MASK_DIR_NAME
     TEST_IMAGES_DIR = test_dir / LOWRES_IMG_DIR_NAME
@@ -180,6 +183,7 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "finetuned_modules": str(finetuned_modules),
             "dataset": f"{DATASET_NAME}",
             "input_img_type": SAM_LORA_INPUT_IMG_TYPE,
+            "input_img_size": str(INPUT_IMG_SIZE),
             "train_set_size": trainset_len,
             "val_set_size": valset_len,
             "num_base_training_images": len(base_training_images),
@@ -239,7 +243,7 @@ def save_params(sam_lora: SamLoRA, wandb_run, suffix: str = None):
 
 def init_data_loaders():
     dataset = SegmentationDataset(
-        images_dir=TRAIN_IMAGES_DIR, masks_dir=TRAIN_MASKS_DIR)
+        images_dir=TRAIN_IMAGES_DIR, masks_dir=TRAIN_MASKS_DIR, img_size=INPUT_IMG_SIZE)
 
     indices = list(range(len(dataset)))
     np.random.shuffle(indices)
@@ -384,8 +388,8 @@ def evaluate_checkpoints(wandb_run: wandb.Run, device: torch.device):
         params = torch.load(param_file, map_location=device)
         sam_lora.load_state_dict(params, strict=False)
 
-        metrics = evaluate_model(sam_lora, TEST_IMAGES_DIR,
-                                 TEST_MASKS_DIR, device, param_file.stem)
+        metrics = evaluate_model(model=sam_lora, test_imgs_dir=TEST_IMAGES_DIR, test_masks_dir=TEST_MASKS_DIR,
+                                 device=device, model_params_name=param_file.stem, input_img_size=INPUT_IMG_SIZE)
         for metric_name, metric_value in metrics.items():
             print(f"        {metric_name}: {metric_value:.4f}")
             wandb_run.summary[metric_name] = metric_value

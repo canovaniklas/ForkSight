@@ -10,15 +10,17 @@ from Segmentation.SAM.sam_lora import SamLoRA
 
 
 class SegmentationDataset(Dataset):
-    def __init__(self, images_dir: Path, masks_dir: Path):
+    def __init__(self, images_dir: Path, masks_dir: Path, img_size: tuple[int, int]):
         self.image_paths = list(images_dir.glob("*.png"))
         self.masks_dir = masks_dir
+        self.img_size = img_size
 
     def _load_image(self, path: Path, is_mask: bool = False) -> torch.Tensor:
         transform = transforms.Compose([
+            # resize to target size because there are random crops of different sizes
             # using nearest neighbor interpolation for masks to preserve label values (no interpolation)
-            # transforms.Resize((1024, 1024), interpolation=(
-            #    transforms.InterpolationMode.NEAREST if is_mask else transforms.InterpolationMode.BILINEAR)),
+            transforms.Resize(self.img_size, interpolation=(
+                transforms.InterpolationMode.NEAREST if is_mask else transforms.InterpolationMode.BILINEAR)),
             transforms.ToTensor()
         ])
 
@@ -113,11 +115,12 @@ def get_batched_input_list(batched_input: torch.Tensor):
 
 
 @torch.no_grad()
-def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, device: torch.device, model_params_name: str):
+def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, device: torch.device, model_params_name: str, input_img_size: tuple[int, int]):
     model.eval()
     model.to(device)
 
-    dataset = SegmentationDataset(test_imgs_dir, test_masks_dir)
+    dataset = SegmentationDataset(
+        test_imgs_dir, test_masks_dir, img_size=input_img_size)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False,)
 
     bce_with_logits_dice_loss = BCEWithLogitsDiceLoss()
