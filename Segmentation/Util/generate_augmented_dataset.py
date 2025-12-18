@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image
 import torch
 import torchvision.transforms as transforms
+import torchvision.transforms.functional as F
 
 from Segmentation.Util.env_utils import load_as, load_as_tuple, load_segmentation_env
 
@@ -22,6 +23,16 @@ HIGHRES_IMG_DIR_NAME = os.getenv("HIGHRES_IMG_DIR_NAME", "images_4096")
 HIGHRES_MASK_DIR_NAME = os.getenv("HIGHRES_MASK_DIR_NAME", "masks_4096")
 LOWRES_IMG_DIR_NAME = os.getenv("LOWRES_IMG_DIR_NAME", "images_1024")
 LOWRES_MASK_DIR_NAME = os.getenv("LOWRES_MASK_DIR_NAME", "masks_1024")
+
+LOWRES_IMG_PATCHES_DIR_NAME = os.getenv(
+    "LOWRES_IMG_PATCHES_DIR_NAME", "img_patches_256")
+LOWRES_MASK_PATCHES_DIR_NAME = os.getenv(
+    "LOWRES_MASK_PATCHES_DIR_NAME", "mask_patches_256")
+HIGHRES_IMG_PATCHES_DIR_NAME = os.getenv(
+    "HIGHRES_IMG_PATCHES_DIR_NAME", "img_patches_1024")
+HIGHRES_MASK_PATCHES_DIR_NAME = os.getenv(
+    "HIGHRES_MASK_PATCHES_DIR_NAME", "mask_patches_1024")
+
 
 DATASET_LOWRES_RESIZE = load_as_tuple(
     "DATASET_LOWRES_RESIZE", "1024,1024", int)
@@ -99,13 +110,14 @@ def random_crop_pair(img: torch.Tensor, mask: torch.Tensor):
     return (cropped_img, cropped_mask)
 
 
-def save_tensor_as_png(tensor_img: torch.Tensor, tensor_mask: torch.Tensor, png_path: Path, out_dir_img: Path, out_dir_mask: Path, aug_name: str):
-    img_transform = transforms.Resize(
-        DATASET_LOWRES_RESIZE, interpolation=transforms.InterpolationMode.BILINEAR)
-    mask_transform = transforms.Resize(
-        DATASET_LOWRES_RESIZE, interpolation=transforms.InterpolationMode.NEAREST)
-    tensor_img = img_transform(tensor_img)
-    tensor_mask = mask_transform(tensor_mask)
+def save_tensor_as_png(tensor_img: torch.Tensor, tensor_mask: torch.Tensor, png_path: Path, out_dir_img: Path, out_dir_mask: Path, aug_name: str, resize: bool):
+    if resize:
+        img_transform = transforms.Resize(
+            DATASET_LOWRES_RESIZE, interpolation=transforms.InterpolationMode.BILINEAR)
+        mask_transform = transforms.Resize(
+            DATASET_LOWRES_RESIZE, interpolation=transforms.InterpolationMode.NEAREST)
+        tensor_img = img_transform(tensor_img)
+        tensor_mask = mask_transform(tensor_mask)
 
     aug_suffix = f"_{aug_name}" if aug_name else ""
     out_file_name = F"{png_path.name.replace('.png', '')}{aug_suffix}.png"
@@ -125,46 +137,33 @@ def save_tensor_as_png(tensor_img: torch.Tensor, tensor_mask: torch.Tensor, png_
     print()
 
 
-def main():
-    set_seeds()
+def init_dir(folder_path: Path):
+    if folder_path.exists():
+        shutil.rmtree(folder_path)
+    folder_path.mkdir(parents=True, exist_ok=True)
 
+
+def augment_and_save():
     raw_data_dir = Path(RAW_DATA_DIR)
     raw_images_dir = raw_data_dir / HIGHRES_IMG_DIR_NAME
     raw_masks_dir = raw_data_dir / HIGHRES_MASK_DIR_NAME
 
     dataset_dir = Path(DATASETS_DIR) / DATASET_NAME
-    train_dir_images = dataset_dir / "train" / LOWRES_IMG_DIR_NAME
-    train_dir_masks = dataset_dir / "train" / LOWRES_MASK_DIR_NAME
-    test_dir_images = dataset_dir / "test" / LOWRES_IMG_DIR_NAME
-    test_dir_masks = dataset_dir / "test" / LOWRES_MASK_DIR_NAME
+    train_dir, test_dir = dataset_dir / "train", dataset_dir / "test"
 
-    if dataset_dir.exists():
-        shutil.rmtree(dataset_dir)
-    dataset_dir.mkdir(parents=True, exist_ok=True)
-    train_dir_images.mkdir(parents=True, exist_ok=True)
-    train_dir_masks.mkdir(parents=True, exist_ok=True)
-    test_dir_images.mkdir(parents=True, exist_ok=True)
-    test_dir_masks.mkdir(parents=True, exist_ok=True)
+    init_dir(dataset_dir)
+    for subdir in [HIGHRES_IMG_DIR_NAME, HIGHRES_MASK_DIR_NAME, LOWRES_IMG_DIR_NAME, LOWRES_MASK_DIR_NAME]:
+        (train_dir / subdir).mkdir(parents=True, exist_ok=True)
+        (test_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     img_paths = [str(p) for p in raw_images_dir.rglob("*.png")]
     random.shuffle(img_paths)
     split_idx = int(0.9 * len(img_paths))
     train_image_paths = img_paths[:split_idx]
-    test_image_paths = img_paths[split_idx:]
 
     for png_path in raw_images_dir.rglob("*.png"):
         img_tensor = load_png_as_tensor(png_path)
-
-        mask_png_path = raw_masks_dir / png_path.name
-        try:
-            mask_tensor = load_png_as_tensor(mask_png_path)
-        except FileNotFoundError as e:
-            # If the corresponding mask file is not found, skip this image
-            print(f"Mask file not found for image {png_path}: {e}")
-            continue
-
-        (img_tensor_griddistort, mask_tensor_griddistort) = grid_distort(
-            img_tensor, mask_tensor)
+        mask_tensor = load_png_as_tensor(raw_masks_dir / png_path.name)
 
         augmentations = [
             (img_tensor, mask_tensor, None),
@@ -182,7 +181,7 @@ def main():
              mask_tensor, "gamma"),
             ((img_tensor + torch.randn_like(img_tensor) *
               DATASET_GAUSSIAN_NOISE).clamp(0.0, 1.0), mask_tensor, "gaussiannoise"),
-            (img_tensor_griddistort, mask_tensor_griddistort, "griddistort")
+            (*grid_distort(img_tensor, mask_tensor), "griddistort")
         ]
 
         random_crops = [random_crop_pair(
@@ -190,13 +189,85 @@ def main():
         for idx, (img_crop, mask_crop) in enumerate(random_crops):
             augmentations.append((img_crop, mask_crop, f"randomcrop{idx}"))
 
-        out_dir_images = train_dir_images if str(
-            png_path) in train_image_paths else test_dir_images
-        out_dir_masks = train_dir_masks if str(
-            png_path) in train_image_paths else test_dir_masks
+        train_test_dir = train_dir if str(
+            png_path) in train_image_paths else test_dir
+        subdirs = [(HIGHRES_IMG_DIR_NAME, HIGHRES_MASK_DIR_NAME, False),
+                   (LOWRES_IMG_DIR_NAME, LOWRES_MASK_DIR_NAME, True)]
+
         for img_aug, mask_aug, aug_name in augmentations:
-            save_tensor_as_png(img_aug, mask_aug, png_path,
-                               out_dir_images, out_dir_masks, aug_name)
+            for subdir_img, subdir_mask, resize in subdirs:
+                out_dir_images = train_test_dir / subdir_img
+                out_dir_masks = train_test_dir / subdir_mask
+                save_tensor_as_png(img_aug, mask_aug, png_path,
+                                   out_dir_images, out_dir_masks, aug_name, resize)
+
+
+def create_grid_patches(input_image_path: Path, output_dir: Path):
+    img = Image.open(input_image_path)
+    img = F.to_tensor(img).unsqueeze(0)
+
+    patch_size = img.shape[2] // 4
+    patches = img.unfold(2, patch_size, patch_size).unfold(
+        3, patch_size, patch_size)
+    _, C, _, _, H, W = patches.shape
+    patches = patches.permute(0, 2, 3, 1, 4, 5).reshape(-1, C, H, W)
+
+    for i, patch in enumerate(patches):
+        patch_img = F.to_pil_image(patch)
+        patch_img.save(
+            output_dir / f"{input_image_path.stem}_patch_{i:02d}.png")
+
+
+def create_patches_and_save():
+    base_dirs = [
+        Path(DATASETS_DIR) / DATASET_NAME / "train",
+        Path(DATASETS_DIR) / DATASET_NAME / "test",
+    ]
+
+    for base_dir in base_dirs:
+        lowres_images_dir = Path(base_dir) / LOWRES_IMG_DIR_NAME
+        lowres_masks_dir = Path(base_dir) / LOWRES_MASK_DIR_NAME
+        highres_images_dir = Path(base_dir) / HIGHRES_IMG_DIR_NAME
+        highres_masks_dir = Path(base_dir) / HIGHRES_MASK_DIR_NAME
+
+        lowres_img_patches_dir = Path(base_dir) / LOWRES_IMG_PATCHES_DIR_NAME
+        lowres_mask_patches_dir = Path(base_dir) / LOWRES_MASK_PATCHES_DIR_NAME
+        highres_img_patches_dir = Path(base_dir) / HIGHRES_IMG_PATCHES_DIR_NAME
+        highres_mask_patches_dir = Path(
+            base_dir) / HIGHRES_MASK_PATCHES_DIR_NAME
+
+        for dir in [lowres_img_patches_dir, lowres_mask_patches_dir, highres_img_patches_dir, highres_mask_patches_dir]:
+            init_dir(dir)
+
+        for in_dir, out_dir in [(lowres_images_dir, lowres_img_patches_dir),
+                                (lowres_masks_dir, lowres_mask_patches_dir),
+                                (highres_images_dir, highres_img_patches_dir),
+                                (highres_masks_dir, highres_mask_patches_dir)]:
+            for png_file in in_dir.glob("*.png"):
+                print(f"Cropping patches from image {png_file.name}")
+                create_grid_patches(png_file, out_dir)
+
+
+def remove_highres_dirs():
+    base_dirs = [
+        Path(DATASETS_DIR) / DATASET_NAME / "train",
+        Path(DATASETS_DIR) / DATASET_NAME / "test",
+    ]
+
+    for base_dir in base_dirs:
+        highres_images_dir = Path(base_dir) / HIGHRES_IMG_DIR_NAME
+        highres_masks_dir = Path(base_dir) / HIGHRES_MASK_DIR_NAME
+        if highres_images_dir.exists():
+            shutil.rmtree(highres_images_dir)
+        if highres_masks_dir.exists():
+            shutil.rmtree(highres_masks_dir)
+
+
+def main():
+    set_seeds()
+    augment_and_save()
+    create_patches_and_save()
+    remove_highres_dirs()
 
 
 if __name__ == "__main__":
