@@ -18,9 +18,9 @@ load_segmentation_env()
 MODEL_CHECKPOINTS_DIR = os.getenv("MODEL_CHECKPOINTS_DIR", "model_checkpoints")
 DATASETS_DIR = os.getenv("DATASETS_DIR")
 DATASET_NAME = os.getenv("DATASET_NAME", "SAM_LoRA_Augmented")
-CROPPED_AUG_IMG_DIR_NAME = os.getenv(
-    "CROPPED_AUG_IMG_DIR_NAME", "images_256")
-CROPPED_AUG_MASK_DIR_NAME = os.getenv("CROPPED_AUG_MASK_DIR_NAME", "masks_256")
+LOWRES_IMG_PATCHES_DIR_NAME = os.getenv(
+    "LOWRES_IMG_PATCHES_DIR_NAME", "images_256")
+LOWRES_MASK_PATCHES_DIR_NAME = os.getenv("LOWRES_MASK_PATCHES_DIR_NAME", "masks_256")
 
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
 WANDB_PROJECT = os.getenv("WANDB_PROJECT", "ForkSight-SAM")
@@ -212,9 +212,9 @@ def get_params_from_artifact(artifact: wandb.Artifact, device: torch.device):
 
 def evaluate_missing_runs(device: torch.device):
     test_imgs_dir = Path(DATASETS_DIR) / DATASET_NAME / \
-        "test" / CROPPED_AUG_IMG_DIR_NAME
+        "test" / LOWRES_IMG_PATCHES_DIR_NAME
     test_masks_dir = Path(DATASETS_DIR) / DATASET_NAME / \
-        "test" / CROPPED_AUG_MASK_DIR_NAME
+        "test" / LOWRES_MASK_PATCHES_DIR_NAME
 
     runs = wandb.Api().runs(
         f"{WANDB_ENTITY}/{WANDB_PROJECT}")

@@ -16,8 +16,10 @@ Below is a table listing all needed environment parameters to run dataset prepar
 | HIGHRES_MASK_DIR_NAME            | Subfolder for 4096×4096 masks                              |
 | LOWRES_IMG_DIR_NAME              | Subfolder for 1024×1024 images                             |
 | LOWRES_MASK_DIR_NAME             | Subfolder for 1024×1024 masks                              |
-| CROPPED_AUG_IMG_DIR_NAME         | Subfolder for 256×256 cropped (and augmented) images                     |
-| CROPPED_AUG_MASK_DIR_NAME        | Subfolder for 256×256 cropped (and augmented) masks                      |
+| LOWRES_IMG_PATCHES_DIR_NAME         | Subfolder for 256×256 patches taken from 1024x1024 downsized augmented full images                     |
+| LOWRES_MASK_PATCHES_DIR_NAME        | Subfolder for 256×256 mask patches taken from 1024x1024 downsized augmented full images                      |
+| HIGHRES_IMG_PATCHES_DIR_NAME         | Subfolder for 1024X1024 patches taken from 4096X4096 augmented full images (same patches as the ones above, but in higher resolution)                     |
+| HIGHRES_MASK_PATCHES_DIR_NAME        | Subfolder for 1024x1024 mask patches taken from 4096x4096 augmented full images (same patches as the ones above, but in higher resolution)                      |
 | SAM3_OUTPUT_DIR_NAME             | Subfolder containing SAM3 output (zero-shot segmentations used for annotation)                           |
 | CVAT_DIR_NAME                    | Directory for exported CVAT projects                       |
 | CVAT_BACKGROUND_COLOR            | CVAT background label RGB value                     |

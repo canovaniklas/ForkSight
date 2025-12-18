@@ -16,8 +16,8 @@ HIGHRES_IMG_DIR_NAME = os.getenv("HIGHRES_IMG_DIR_NAME", "images_4096")
 HIGHRES_MASK_DIR_NAME = os.getenv("HIGHRES_MASK_DIR_NAME", "masks_4096")
 LOWRES_IMG_DIR_NAME = os.getenv("LOWRES_IMG_DIR_NAME", "images_1024")
 LOWRES_MASK_DIR_NAME = os.getenv("LOWRES_MASK_DIR_NAME", "masks_1024")
-CROPPED_AUG_IMG_DIR_NAME = os.getenv("CROPPED_AUG_IMG_DIR_NAME", "images_256")
-CROPPED_AUG_MASK_DIR_NAME = os.getenv("CROPPED_AUG_MASK_DIR_NAME", "masks_256")
+LOWRES_IMG_PATCHES_DIR_NAME = os.getenv("LOWRES_IMG_PATCHES_DIR_NAME", "images_256")
+LOWRES_MASK_PATCHES_DIR_NAME = os.getenv("LOWRES_MASK_PATCHES_DIR_NAME", "masks_256")
 
 if not DATASETS_DIR:
     raise ValueError("DATASETS_DIR environment variable must be set.")
@@ -53,8 +53,8 @@ def crop_image_grid(input_image_path: Path, output_dir: Path):
 for base_dir in base_dirs:
     images_dir = Path(base_dir) / LOWRES_IMG_DIR_NAME
     masks_dir = Path(base_dir) / LOWRES_MASK_DIR_NAME
-    cropped_images_dir = Path(base_dir) / CROPPED_AUG_IMG_DIR_NAME
-    cropped_masks_dir = Path(base_dir) / CROPPED_AUG_MASK_DIR_NAME
+    cropped_images_dir = Path(base_dir) / LOWRES_IMG_PATCHES_DIR_NAME
+    cropped_masks_dir = Path(base_dir) / LOWRES_MASK_PATCHES_DIR_NAME
 
     if not images_dir.exists() or not masks_dir.exists():
         print(
