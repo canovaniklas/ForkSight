@@ -156,10 +156,14 @@ def augment_and_save():
         (train_dir / subdir).mkdir(parents=True, exist_ok=True)
         (test_dir / subdir).mkdir(parents=True, exist_ok=True)
 
-    img_paths = [str(p) for p in raw_images_dir.rglob("*.png")]
+    img_paths = sorted([str(p) for p in raw_images_dir.rglob("*.png")])
     random.shuffle(img_paths)
     split_idx = int(0.9 * len(img_paths))
     train_image_paths = img_paths[:split_idx]
+    test_image_paths = img_paths[split_idx:]
+
+    print("training images: ", str([Path(p).name for p in train_image_paths]))
+    print("testing images: ", str([Path(p).name for p in test_image_paths]))
 
     for png_path in raw_images_dir.rglob("*.png"):
         img_tensor = load_png_as_tensor(png_path)
