@@ -10,6 +10,7 @@ import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
 
 from Segmentation.Util.env_utils import load_as, load_as_tuple, load_segmentation_env
+from Segmentation.Util.dataset_util import create_patches_from_img
 
 load_segmentation_env()
 
@@ -206,22 +207,6 @@ def augment_and_save():
                                    out_dir_images, out_dir_masks, aug_name, resize)
 
 
-def create_grid_patches(input_image_path: Path, output_dir: Path):
-    img = Image.open(input_image_path)
-    img = F.to_tensor(img).unsqueeze(0)
-
-    patch_size = img.shape[2] // 4
-    patches = img.unfold(2, patch_size, patch_size).unfold(
-        3, patch_size, patch_size)
-    _, C, _, _, H, W = patches.shape
-    patches = patches.permute(0, 2, 3, 1, 4, 5).reshape(-1, C, H, W)
-
-    for i, patch in enumerate(patches):
-        patch_img = F.to_pil_image(patch)
-        patch_img.save(
-            output_dir / f"{input_image_path.stem}_patch_{i:02d}.png")
-
-
 def create_patches_and_save():
     base_dirs = [
         Path(DATASETS_DIR) / DATASET_NAME / "train",
@@ -249,7 +234,13 @@ def create_patches_and_save():
                                 (highres_masks_dir, highres_mask_patches_dir)]:
             for png_file in in_dir.glob("*.png"):
                 print(f"Cropping patches from image {png_file.name}")
-                create_grid_patches(png_file, out_dir)
+
+                patches = create_patches_from_img(
+                    png_file, nof_division_per_dim=4)
+                for i, patch in enumerate(patches):
+                    patch_img = F.to_pil_image(patch)
+                    patch_img.save(
+                        out_dir / f"{png_file.stem}_patch_{i:02d}.png")
 
 
 def remove_highres_dirs():

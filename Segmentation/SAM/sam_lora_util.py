@@ -1,25 +1,36 @@
+import os
 from pathlib import Path
+import re
+from typing import Any, Mapping
+from segment_anything import sam_model_registry
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 from PIL import Image
+import wandb
 
 from Segmentation.SAM.sam_lora import SamLoRA
+from Segmentation.Util.env_utils import load_segmentation_env
+
+load_segmentation_env()
+
+MODEL_CHECKPOINTS_DIR = os.getenv("MODEL_CHECKPOINTS_DIR")
+
+EVALUATED_TAG = "test-evaluated"
 
 
 class SegmentationDataset(Dataset):
-    def __init__(self, images_dir: Path, masks_dir: Path, img_size: tuple[int, int]):
+    def __init__(self, images_dir: Path, masks_dir: Path):
         self.image_paths = list(images_dir.glob("*.png"))
         self.masks_dir = masks_dir
-        self.img_size = img_size
 
     def _load_image(self, path: Path, is_mask: bool = False) -> torch.Tensor:
         transform = transforms.Compose([
-            # resize to target size because there are random crops of different sizes
+            # resize to 1024x1024 size because a) there are random crops of different sizes, b) SAM model was trained on 1024x1024 images and performs best at that size
             # using nearest neighbor interpolation for masks to preserve label values (no interpolation)
-            transforms.Resize(self.img_size, interpolation=(
+            transforms.Resize((1024, 1024), interpolation=(
                 transforms.InterpolationMode.NEAREST if is_mask else transforms.InterpolationMode.BILINEAR)),
             transforms.ToTensor()
         ])
@@ -115,12 +126,11 @@ def get_batched_input_list(batched_input: torch.Tensor):
 
 
 @torch.no_grad()
-def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, device: torch.device, model_params_name: str, input_img_size: tuple[int, int]):
+def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, device: torch.device, model_params_name: str):
     model.eval()
     model.to(device)
 
-    dataset = SegmentationDataset(
-        test_imgs_dir, test_masks_dir, img_size=input_img_size)
+    dataset = SegmentationDataset(test_imgs_dir, test_masks_dir)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False,)
 
     bce_with_logits_dice_loss = BCEWithLogitsDiceLoss()
@@ -151,3 +161,37 @@ def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, de
     }
 
     return (metrics)
+
+
+def initialize_sam_lora_with_params(wandb_run_config: dict[str, Any], params: Mapping[str, Any], device: torch.device) -> SamLoRA:
+    sam_checkpoint = str(Path(MODEL_CHECKPOINTS_DIR) /
+                         f"{wandb_run_config['SAM_checkpoint']}.pth")
+    sam = sam_model_registry[wandb_run_config["SAM_model_type"]](
+        checkpoint=sam_checkpoint)
+
+    sam.to(device)
+
+    finetune_img_encoder = "image_encoder" in wandb_run_config["finetuned_modules"]
+    finetune_mask_decoder = "mask_decoder" in wandb_run_config["finetuned_modules"]
+    finetune_prompt_encoder = "prompt_encoder" in wandb_run_config["finetuned_modules"]
+
+    sam_lora = SamLoRA(sam, r=wandb_run_config["LoRA_rank"], finetune_img_encoder=finetune_img_encoder,
+                       finetune_mask_decoder=finetune_mask_decoder, finetune_prompt_encoder=finetune_prompt_encoder)
+    sam_lora.to(device)
+
+    sam_lora.load_state_dict(params, strict=False)
+
+    return sam_lora
+
+
+def get_params_from_artifact(artifact: wandb.Artifact, device: torch.device):
+    pattern = re.compile(r"(params.*)")
+    match = pattern.search(artifact.name)
+    if match is None:
+        return None, None
+
+    artifact_dir = artifact.download()
+    ckpt_path = next(Path(artifact_dir).glob("*.pt"))
+    params = torch.load(ckpt_path, map_location=device)
+
+    return params, match.group(1).replace(":v0", "")

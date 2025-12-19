@@ -1,5 +1,8 @@
 import re
 from pathlib import Path
+from PIL import Image
+import torchvision.transforms.functional as F
+import torch
 
 
 def get_base_images(imgs_dir: Path) -> list[str]:
@@ -17,3 +20,15 @@ def get_base_images(imgs_dir: Path) -> list[str]:
             base_image_paths.add(match.group(1))
 
     return list(base_image_paths)
+
+
+def create_patches_from_img(input_image_path: Path, nof_division_per_dim=4) -> torch.Tensor:
+    img = Image.open(input_image_path)
+    img = F.to_tensor(img).unsqueeze(0)
+
+    patch_size = img.shape[2] // nof_division_per_dim
+    patches = img.unfold(2, patch_size, patch_size).unfold(
+        3, patch_size, patch_size)
+    _, C, _, _, H, W = patches.shape
+
+    return patches.permute(0, 2, 3, 1, 4, 5).reshape(-1, C, H, W)
