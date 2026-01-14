@@ -1,4 +1,4 @@
-$base = "C:\Users\juhe9\repos\MasterThesis\ForkSight\Segmentation\Data"
+$base = "C:\Users\juhe9\repos\MasterThesis\ForkSight\Segmentation\Data\RawData"
 $remoteimages = "sciencecluster:/home/jhehli/data/raw_data/images_4096"
 $remotemasks = "sciencecluster:/home/jhehli/data/raw_data/masks_4096"
 

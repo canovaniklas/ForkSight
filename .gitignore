@@ -1,5 +1,4 @@
 venv/
-Segmentation/Data/
 .env
 __pycache__/
 *.pyc
@@ -7,3 +6,6 @@ __pycache__/
 .DS_Store
 wandb/
 *.pt
+
+Segmentation/Data/*
+!Segmentation/Data/dataset_splits.json

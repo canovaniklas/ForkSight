@@ -1,3 +1,13 @@
+# creates a CVAT-compatible annotation ZIP from SAM3 output PNGs in the Segmentation Mask 1.1 format
+# workflow:
+#   create base annotations with sam3_zeroshot_segmentation
+#   create ZIP file with this script
+#   create a task in CVAT with two labels: "DNA" (250, 50, 83) and "background" (0, 0, 0)
+#   upload the ZIP file as annotations using the Segmentation Mask 1.1 format
+#   run actions -> shapes converter: polygons to masks
+#   remove the background label from the task
+#   review and adjust annotations as needed
+
 from datetime import datetime
 import os
 import numpy as np
@@ -19,43 +29,52 @@ if not RAW_DATA_DIR:
 CVAT_BACKGROUND_COLOR = load_as_tuple("CVAT_BACKGROUND_COLOR", "0,0,0", int)
 CVAT_MASK_COLOR = load_as_tuple("CVAT_MASK_COLOR", "250,50,83", int)
 
-sam3_output_dir = Path(RAW_DATA_DIR) / SAM3_OUTPUT_DIR_NAME
-output_zip_path = sam3_output_dir / f"cvat_annotations_{datetime.now().strftime(" % Y % m % d_ % H % M % S")}.zip"
 
-color_map = {
-    0: CVAT_BACKGROUND_COLOR,   # background
-    255: CVAT_MASK_COLOR        # DNA
-}
+def main():
+    sam3_output_dir = Path(RAW_DATA_DIR) / SAM3_OUTPUT_DIR_NAME
+    output_zip_path = sam3_output_dir / \
+        f"cvat_annotations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
 
-with zipfile.ZipFile(output_zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
+    color_map = {
+        0: CVAT_BACKGROUND_COLOR,   # background
+        255: CVAT_MASK_COLOR        # DNA
+    }
 
-    labelmap_content = f"""# label:color_rgb:parts:actions
-DNA:{','.join(map(str, CVAT_MASK_COLOR))}::
-background:{','.join(map(str, CVAT_BACKGROUND_COLOR))}::
-"""
-    zipf.writestr("labelmap.txt", labelmap_content)
+    with zipfile.ZipFile(output_zip_path, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
 
-    filenames = []
-    for img_path in sam3_output_dir.glob("*.png"):
-        img = Image.open(str(img_path))
-        arr = np.array(img)
+        labelmap_content = f"""# label:color_rgb:parts:actions
+    DNA:{','.join(map(str, CVAT_MASK_COLOR))}::
+    background:{','.join(map(str, CVAT_BACKGROUND_COLOR))}::
+    """
+        zipf.writestr("labelmap.txt", labelmap_content)
 
-        rgb_arr = np.zeros((arr.shape[0], arr.shape[1], 3), dtype=np.uint8)
-        rgb_arr[arr == 0] = color_map[0]
-        rgb_arr[arr == 255] = color_map[255]
+        filenames = []
+        for img_path in sam3_output_dir.glob("*.png"):
+            img = Image.open(str(img_path))
+            arr = np.array(img)
 
-        rgb_img = Image.fromarray(rgb_arr, mode='RGB')
+            rgb_arr = np.zeros((arr.shape[0], arr.shape[1], 3), dtype=np.uint8)
+            rgb_arr[arr == 0] = color_map[0]
+            rgb_arr[arr == 255] = color_map[255]
 
-        img_buffer = BytesIO()
-        rgb_img.save(img_buffer, format='PNG')
-        img_buffer.seek(0)
+            rgb_img = Image.fromarray(rgb_arr, mode='RGB')
 
-        zipf.writestr(f"SegmentationClass/{img_path.name}", img_buffer.read())
+            img_buffer = BytesIO()
+            rgb_img.save(img_buffer, format='PNG')
+            img_buffer.seek(0)
 
-        filenames.append(img_path.stem)
-        print(f"Processed {img_path.name}")
+            zipf.writestr(
+                f"SegmentationClass/{img_path.name}", img_buffer.read())
 
-    default_txt_content = "\n".join(filenames) + "\n"
-    zipf.writestr("ImageSets/Segmentation/default.txt", default_txt_content)
+            filenames.append(img_path.stem)
+            print(f"Processed {img_path.name}")
 
-print(f"ZIP file created: {output_zip_path}")
+        default_txt_content = "\n".join(filenames) + "\n"
+        zipf.writestr("ImageSets/Segmentation/default.txt",
+                      default_txt_content)
+
+    print(f"ZIP file created: {output_zip_path}")
+
+
+if __name__ == "__main__":
+    main()

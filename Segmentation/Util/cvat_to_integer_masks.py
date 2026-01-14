@@ -16,9 +16,6 @@ HIGHRES_MASK_DIR_NAME = os.getenv("HIGHRES_MASK_DIR_NAME", "masks_4096")
 CVAT_MASK_COLOR = load_as_tuple("CVAT_MASK_COLOR", "250,50,83", int)
 CVAT_GENERATE_BW_MASKS = load_as_bool("CVAT_GENERATE_BW_MASKS", True)
 
-CVAT_EXPORT_DIRS = [
-    f"{datetime.now().strftime('%Y%m%d')}_segmentation_mask_1.1"]
-
 if RAW_DATA_DIR is None:
     raise ValueError("RAW_DATA_DIR environment variable is not set")
 
@@ -32,13 +29,7 @@ def main():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for cvat_export_dir in CVAT_EXPORT_DIRS:
-        input_dir = cvat_dir / cvat_export_dir
-
-        if not input_dir.is_dir():
-            print("Error: directory does not exist:", input_dir)
-            return
-
+    for input_dir in [p for p in cvat_dir.iterdir() if p.is_dir()]:
         for png_path in input_dir.rglob("SegmentationClass/*.png"):
             try:
                 img = Image.open(png_path)
