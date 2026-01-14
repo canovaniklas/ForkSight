@@ -137,7 +137,7 @@ def init_dir(folder_path: Path):
 
 
 def load_dataset_split() -> dict[str, list[str]]:
-    splits_file = Path(DATASETS_DIR) / "dataset_splits.json"
+    splits_file = Path(__file__).resolve().parent / "dataset_splits.json"
     with open(splits_file, "r") as f:
         splits = json.load(f)
     return splits[DATASET_NAME] if DATASET_NAME in splits else None

@@ -8,4 +8,3 @@ wandb/
 *.pt
 
 Segmentation/Data/*
-!Segmentation/Data/dataset_splits.json
