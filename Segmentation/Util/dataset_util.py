@@ -5,16 +5,18 @@ import torchvision.transforms.functional as F
 import torch
 
 
-def get_base_images(imgs_dir: Path) -> list[str]:
+def get_base_images(imgs_dir: Path, exclude_soi_images: bool = True) -> list[str]:
     if not imgs_dir.exists():
         raise ValueError(f"Images directory {imgs_dir} does not exist.")
 
     base_image_paths = set()
     pattern = re.compile(
-        r'(\d{8}_.+?_tileset_\d+_tile_\d+_\d+)'
+        r'(\d{8}_.+?_tileset_\d+_tile_\d+_\d+(?:_soi)?)'
     )
 
     for img_path in imgs_dir.glob("*.png"):
+        if exclude_soi_images and "_soi_" in img_path.stem:
+            continue
         match = pattern.search(img_path.stem)
         if match and match not in base_image_paths:
             base_image_paths.add(match.group(1))

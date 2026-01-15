@@ -201,8 +201,6 @@ def augment_and_save():
              torch.rot90(mask_tensor, k=3, dims=(-2, -1)), "rot270"),
             (img_tensor.clamp(1e-6, 1.0).pow(random.uniform(*DATASET_GAMMA_RANGE)),
              mask_tensor, "gamma"),
-            # ((img_tensor + torch.randn_like(img_tensor) *
-            # DATASET_GAUSSIAN_NOISE).clamp(0.0, 1.0), mask_tensor, "gaussiannoise"),
             (*grid_distort(img_tensor, mask_tensor), "griddistort")
         ]
 
