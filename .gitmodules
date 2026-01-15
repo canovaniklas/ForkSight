@@ -1,3 +1,0 @@
-[submodule "Segmentation/clDice"]
-	path = Segmentation/clDice
-	url = https://github.com/justinhehli/clDice.git
