@@ -184,12 +184,13 @@ def hard_dice_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
 
 def hard_clDice(mask_predicted, mask_target):
     def cl_score(img, skeleton):
-        return np.sum(img * skeleton) / np.sum(skeleton)
+        return np.sum(img * skeleton) / max(np.sum(skeleton), 1e-6)
 
     tprec = cl_score(mask_predicted, skeletonize(mask_target))
     tsens = cl_score(mask_target, skeletonize(mask_predicted))
+    cl_dice = 2 * tprec * tsens / max(tprec + tsens, 1e-6)
 
-    return 2 * tprec * tsens / (tprec + tsens)
+    return cl_dice, tprec, tsens
 
 
 def iou_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -217,6 +218,8 @@ def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, de
     bce_with_logits_dice_loss = ClDiceDiceBCELoss(
         skeletonize_iter=cl_dice_skeletonize_iter, cl_dice_weight=cl_dice_weight, dice_weight=dice_weight)
 
+    tprec_scores = []
+    tsens_scores = []
     hard_clDice_scores = []
     hard_dice_scores = []
     iou_scores = []
@@ -239,13 +242,19 @@ def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, de
 
         output_mask_np = output_mask.squeeze(0).cpu().numpy()
         mask_np = mask.squeeze(0).cpu().numpy()
-        hard_clDice_scores.append(hard_clDice(output_mask_np, mask_np))
+
+        cl_dice_score, tprec, tsens = hard_clDice(output_mask_np, mask_np)
+        hard_clDice_scores.append(cl_dice_score)
+        tprec_scores.append(tprec)
+        tsens_scores.append(tsens)
 
     metrics = {
         f"test/{model_params_name}/mean_bce_dice_loss": sum(losses) / len(losses),
         f"test/{model_params_name}/mean_dice_score": sum(hard_dice_scores) / len(hard_dice_scores),
         f"test/{model_params_name}/mean_iou_score": sum(iou_scores) / len(iou_scores),
-        f"test/{model_params_name}/mean_clDice_score": sum(hard_clDice_scores) / len(hard_clDice_scores)
+        f"test/{model_params_name}/mean_clDice_score": sum(hard_clDice_scores) / len(hard_clDice_scores),
+        f"test/{model_params_name}/mean_tprec": sum(tprec_scores) / len(tprec_scores),
+        f"test/{model_params_name}/mean_tsens": sum(tsens_scores) / len(tsens_scores),
     }
 
     return (metrics)
