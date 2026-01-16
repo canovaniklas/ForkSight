@@ -46,6 +46,9 @@ Below is a table listing all needed environment parameters to run dataset prepar
 | SAM_LORA_BATCH_SIZE              | Batch size                                                 |
 | SAM_LORA_MAX_EPOCHS              | Maximum number of epochs                                   |
 | SAM_LORA_UPSAMPLE_LOWRES_LOGITS  | Size to which low-resolution (256x256) logits output by SAM are resized during loss calculation. Leave empty for no upsampling, meaning the ground truth images will be resized to 256x256                |
+| SAM_LORA_CL_DICE_LOSS_WEIGHT     | Weight of clDice term in loss function                      |
+| SAM_LORA_DICE_LOSS_WEIGHT        | Weight of Dice term in loss function                      |
+| SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS        | Number of iterations for skeletonization in clDice                      |
 | SAM_LORA_MODEL_CHECKPOINT        | SAM checkpoint used for training (located in MODEL_CHECKPOINTS_DIR)                      |
 | SAM_LORA_MODEL_TYPE              | SAM model type (e.g., vit_b)                               |
 | SAM_LORA_RANK                    | LoRA rank value                                            |

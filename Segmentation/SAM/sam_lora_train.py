@@ -12,7 +12,7 @@ from pathlib import Path
 import wandb
 
 from Segmentation.SAM.sam_lora import SamLoRA
-from Segmentation.SAM.sam_lora_util import BCEWithLogitsDiceLoss, SegmentationDataset, evaluate_model, get_batched_input_list, EVALUATED_TAG
+from Segmentation.SAM.sam_lora_util import ClDiceDiceBCELoss, SegmentationDataset, evaluate_model, get_batched_input_list, EVALUATED_TAG
 from Segmentation.Util.env_utils import load_as, load_as_bool, load_as_tuple, load_segmentation_env
 from Segmentation.Util.dataset_util import get_base_images
 
@@ -61,6 +61,11 @@ SAM_LORA_MODEL_CHECKPOINT = os.getenv(
     "SAM_LORA_MODEL_CHECKPOINT", "sam_vit_b_01ec64")
 SAM_LORA_RANK = load_as("SAM_LORA_RANK", int, 4)
 SAM_LORA_SCHEDULER_TYPE = os.getenv("SAM_LORA_SCHEDULER_TYPE", "OneCycleLR")
+SAM_LORA_CL_DICE_LOSS_WEIGHT = load_as(
+    "SAM_LORA_CL_DICE_LOSS_WEIGHT", float, 0.45)
+SAM_LORA_DICE_LOSS_WEIGHT = load_as("SAM_LORA_DICE_LOSS_WEIGHT", float, 0.45)
+SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS = load_as(
+    "SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS", int, 15)
 
 EARLY_STOPPING_PATIENCE = load_as("EARLY_STOPPING_PATIENCE", int, 15)
 EARLY_STOPPING_DELTA = load_as("EARLY_STOPPING_DELTA", float, 0.005)
@@ -180,6 +185,9 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "num_classes": SAM_LORA_NUM_CLASSES,
             "trainable_parameters": trainable_params_count,
             "upsample_lowres_logits": str(SAM_LORA_UPSAMPLE_LOWRES_LOGITS),
+            "cl_dice_loss_weight": SAM_LORA_CL_DICE_LOSS_WEIGHT,
+            "dice_loss_weight": SAM_LORA_DICE_LOSS_WEIGHT,
+            "cl_dice_skeletonize_iterations": SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS,
         },
     )
 
@@ -259,8 +267,10 @@ def get_trainable_params(sam_lora: SamLoRA):
 
 
 def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, validationloader: DataLoader, device: torch.device):
-    loss_fn = BCEWithLogitsDiceLoss(
-        upsample_lowres_logits=SAM_LORA_UPSAMPLE_LOWRES_LOGITS)
+    loss_fn = ClDiceDiceBCELoss(skeletonize_iter=SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS,
+                                cl_dice_weight=SAM_LORA_CL_DICE_LOSS_WEIGHT,
+                                dice_weight=SAM_LORA_DICE_LOSS_WEIGHT,
+                                upsample_lowres_logits=SAM_LORA_UPSAMPLE_LOWRES_LOGITS)
 
     trainable_params = get_trainable_params(sam_lora)
     for name, p in trainable_params:
@@ -376,7 +386,9 @@ def evaluate_checkpoints(wandb_run: wandb.Run, device: torch.device):
         sam_lora.load_state_dict(params, strict=False)
 
         metrics = evaluate_model(model=sam_lora, test_imgs_dir=TEST_IMAGES_DIR, test_masks_dir=TEST_MASKS_DIR,
-                                 device=device, model_params_name=param_file.stem)
+                                 device=device, model_params_name=param_file.stem,
+                                 cl_dice_skeletonize_iter=SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS, cl_dice_weight=SAM_LORA_CL_DICE_LOSS_WEIGHT,
+                                 dice_weight=SAM_LORA_DICE_LOSS_WEIGHT)
         for metric_name, metric_value in metrics.items():
             print(f"        {metric_name}: {metric_value:.4f}")
             wandb_run.summary[metric_name] = metric_value

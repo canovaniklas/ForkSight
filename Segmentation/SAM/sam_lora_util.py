@@ -10,6 +10,8 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 from PIL import Image
 import wandb
+from skimage.morphology import skeletonize
+import numpy as np
 
 from Segmentation.SAM.sam_lora import SamLoRA
 from Segmentation.Util.env_utils import load_segmentation_env
@@ -55,27 +57,105 @@ class SegmentationDataset(Dataset):
         return image, mask
 
 
-class BCEWithLogitsDiceLoss(nn.Module):
-    """
-    Combined BCEWithLogits + Soft Dice loss for binary segmentation.
+class BCEWithLogitsLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.bce = nn.BCEWithLogitsLoss(reduction='none')
 
-    Args:
-      bce_weight: weight for the BCE loss term.
-      dice_weight: weight for the Dice loss term.
-      smooth: smoothing constant to avoid division by zero.
-      reduction: 'mean' or 'sum' for reduction over batch for final loss.
-    """
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        pixel_bce = self.bce(logits, targets)
+        sample_bce = pixel_bce.view(pixel_bce.shape[0], -1).mean(dim=1)
+        return sample_bce.mean()
 
-    def __init__(self, dice_weight: float = 0.8, upsample_lowres_logits=None):
+
+class SoftDiceLoss(nn.Module):
+    def __init__(self):
         super().__init__()
 
-        self.bce = nn.BCEWithLogitsLoss(reduction='none')
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        masks_prob = torch.sigmoid(logits)
+
+        masks_flat = masks_prob.view(masks_prob.shape[0], -1)
+        targets_flat = targets.view(targets.shape[0], -1)
+
+        intersection = (masks_flat * targets_flat).sum(dim=1)
+        cardinality = masks_flat.sum(dim=1) + targets_flat.sum(dim=1)
+
+        return (1 - (2 * intersection + 1e-6) / (cardinality + 1e-6)).mean()
+
+
+class SoftSkeletonize(torch.nn.Module):
+    def __init__(self, num_iter: int):
+        super(SoftSkeletonize, self).__init__()
+        self.num_iter = num_iter
+
+    def soft_erode(self, img):
+        p1 = -F.max_pool2d(-img, (3, 1), (1, 1), (1, 0))
+        p2 = -F.max_pool2d(-img, (1, 3), (1, 1), (0, 1))
+        return torch.min(p1, p2)
+
+    def soft_dilate(self, img):
+        return F.max_pool2d(img, (3, 3), (1, 1), (1, 1))
+
+    def soft_open(self, img):
+        return self.soft_dilate(self.soft_erode(img))
+
+    def soft_skel(self, img):
+        img1 = self.soft_open(img)
+        skel = F.relu(img - img1)
+
+        for j in range(self.num_iter):
+            img = self.soft_erode(img)
+            img1 = self.soft_open(img)
+            delta = F.relu(img - img1)
+            skel = skel + F.relu(delta - skel * delta)
+
+        return skel
+
+    def forward(self, img):
+        # input img shape: (B, C, H, W), where C = 1 for binary masks (foreground only)
+        return self.soft_skel(img)
+
+
+class SoftClDiceLoss(nn.Module):
+    def __init__(self, skeletonize_iter: int, smooth: float = 1.0):
+        super(SoftClDiceLoss, self).__init__()
+        self.iter = skeletonize_iter
+        self.smooth = smooth
+        self.soft_skeletonize = SoftSkeletonize(num_iter=skeletonize_iter)
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor):
+        mask_prob = torch.sigmoid(logits)
+
+        skel_pred = self.soft_skeletonize(mask_prob)
+        skel_true = self.soft_skeletonize(targets)
+
+        tprec = (torch.sum(torch.multiply(skel_pred, targets)) +
+                 self.smooth) / (torch.sum(skel_pred) + self.smooth)
+        tsens = (torch.sum(torch.multiply(skel_true, mask_prob)) +
+                 self.smooth) / (torch.sum(skel_true) + self.smooth)
+
+        return 1. - 2.0 * (tprec * tsens) / (tprec + tsens)
+
+
+class ClDiceDiceBCELoss(nn.Module):
+    def __init__(self, skeletonize_iter: int, cl_dice_weight: float, dice_weight: float, upsample_lowres_logits: tuple[int, int] | None = None):
+        super(ClDiceDiceBCELoss, self).__init__()
+
+        self.cl_dice_loss = SoftClDiceLoss(skeletonize_iter)
+        self.dice_loss = SoftDiceLoss()
+        self.bce_loss = BCEWithLogitsLoss()
+
+        assert cl_dice_weight + \
+            dice_weight <= 1.0, "Sum of cl_dice_weight and dice_weight must be less than or equal to 1.0"
+        assert cl_dice_weight >= 0.0 and dice_weight >= 0.0, "Weights must be non-negative"
+
+        self.cl_dice_weight = cl_dice_weight
         self.dice_weight = dice_weight
         self.upsample_lowres_logits = upsample_lowres_logits
 
     def forward(self, low_res_logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         """
-        masks: predicted masks logits, shape (B, 1, H_original, W_original)
         low_res_logits: predicted low-res mask logits, shape (B, 1, H_lowres, W_lowres)
         targets: binary 0/1, shape (B, 1, H_original, W_original)
         """
@@ -87,29 +167,29 @@ class BCEWithLogitsDiceLoss(nn.Module):
         targets_resized = F.interpolate(targets, size=(
             low_res_logits.shape[-2], low_res_logits.shape[-1]), mode='nearest')
 
-        # --- cross entropy term ---
-        pixel_bce = self.bce(low_res_logits, targets_resized)
-        sample_bce = pixel_bce.view(pixel_bce.shape[0], -1).mean(dim=1)
-        bce_loss = sample_bce.mean()
+        cl_dice_loss_value = self.cl_dice_loss(low_res_logits, targets_resized)
+        dice_loss_value = self.dice_loss(low_res_logits, targets_resized)
+        bce_loss_value = self.bce_loss(low_res_logits, targets_resized)
 
-        # --- dice term ---
-        masks_prob = torch.sigmoid(low_res_logits)
-        masks_flat = masks_prob.view(masks_prob.shape[0], -1)
-        targets_flat = targets_resized.view(targets_resized.shape[0], -1)
-
-        intersection = (masks_flat * targets_flat).sum(dim=1)
-        cardinality = masks_flat.sum(dim=1) + targets_flat.sum(dim=1)
-        dice_loss = (1 - (2 * intersection + 1e-6) /
-                     (cardinality + 1e-6)).mean()
-
-        # --- combined loss ---
-        return (1.0 - self.dice_weight) * bce_loss + self.dice_weight * dice_loss
+        return (self.cl_dice_weight * cl_dice_loss_value) + \
+            (self.dice_weight * dice_loss_value) + \
+            (1 - self.cl_dice_weight - self.dice_weight) * bce_loss_value
 
 
 def hard_dice_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     intersection = torch.sum(pred * target)
     union = torch.sum(pred) + torch.sum(target)
     return (2 * intersection + 1e-6) / (union + 1e-6)
+
+
+def hard_clDice(mask_predicted, mask_target):
+    def cl_score(img, skeleton):
+        return np.sum(img * skeleton) / np.sum(skeleton)
+
+    tprec = cl_score(mask_predicted, skeletonize(mask_target))
+    tsens = cl_score(mask_target, skeletonize(mask_predicted))
+
+    return 2 * tprec * tsens / (tprec + tsens)
 
 
 def iou_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -126,38 +206,46 @@ def get_batched_input_list(batched_input: torch.Tensor):
 
 
 @torch.no_grad()
-def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, device: torch.device, model_params_name: str):
+def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, device: torch.device, model_params_name: str,
+                   cl_dice_skeletonize_iter: int, cl_dice_weight: float, dice_weight: float):
     model.eval()
     model.to(device)
 
     dataset = SegmentationDataset(test_imgs_dir, test_masks_dir)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False,)
 
-    bce_with_logits_dice_loss = BCEWithLogitsDiceLoss()
+    bce_with_logits_dice_loss = ClDiceDiceBCELoss(
+        skeletonize_iter=cl_dice_skeletonize_iter, cl_dice_weight=cl_dice_weight, dice_weight=dice_weight)
 
+    hard_clDice_scores = []
     hard_dice_scores = []
     iou_scores = []
     losses = []
 
-    for images, masks in dataloader:
-        images = images.to(device)
-        masks = masks.to(device)
+    for image, mask in dataloader:
+        image = image.to(device)
+        mask = mask.to(device)
 
-        batched_input = get_batched_input_list(images)
+        batched_input = get_batched_input_list(image)
         outputs = model(batched_input, multimask_output=False)
 
         output_logits = torch.cat([d["low_res_logits"]
                                    for d in outputs], dim=0)
         output_mask = outputs[0]['masks'].squeeze(0)
 
-        losses.append(bce_with_logits_dice_loss(output_logits, masks).item())
-        hard_dice_scores.append(hard_dice_score(output_mask, masks).item())
-        iou_scores.append(iou_score(output_mask, masks).item())
+        losses.append(bce_with_logits_dice_loss(output_logits, mask).item())
+        hard_dice_scores.append(hard_dice_score(output_mask, mask).item())
+        iou_scores.append(iou_score(output_mask, mask).item())
+
+        output_mask_np = output_mask.squeeze(0).cpu().numpy()
+        mask_np = mask.squeeze(0).cpu().numpy()
+        hard_clDice_scores.append(hard_clDice(output_mask_np, mask_np))
 
     metrics = {
         f"test/{model_params_name}/mean_bce_dice_loss": sum(losses) / len(losses),
         f"test/{model_params_name}/mean_dice_score": sum(hard_dice_scores) / len(hard_dice_scores),
         f"test/{model_params_name}/mean_iou_score": sum(iou_scores) / len(iou_scores),
+        f"test/{model_params_name}/mean_clDice_score": sum(hard_clDice_scores) / len(hard_clDice_scores)
     }
 
     return (metrics)
