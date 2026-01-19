@@ -10,7 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
 from PIL import Image
 import wandb
-from skimage.morphology import skeletonize
+from skimage.morphology import skeletonize, dilation, disk
 import numpy as np
 
 from Segmentation.SAM.sam_lora import SamLoRA
@@ -118,7 +118,7 @@ class SoftSkeletonize(torch.nn.Module):
 
 
 class SoftClDiceLoss(nn.Module):
-    def __init__(self, skeletonize_iter: int, smooth: float = 1.0):
+    def __init__(self, skeletonize_iter: int, smooth: float = 1e-6):
         super(SoftClDiceLoss, self).__init__()
         self.iter = skeletonize_iter
         self.smooth = smooth
@@ -174,6 +174,87 @@ class ClDiceDiceBCELoss(nn.Module):
         return (self.cl_dice_weight * cl_dice_loss_value) + \
             (self.dice_weight * dice_loss_value) + \
             (1 - self.cl_dice_weight - self.dice_weight) * bce_loss_value
+
+
+class SkeletonRecallLoss2D(nn.Module):
+    def __init__(self):
+        super(SkeletonRecallLoss2D, self).__init__()
+
+    def _skeletonize_sample(self, mask: torch.Tensor) -> torch.Tensor:
+        device = mask.device
+
+        mask_np = mask.detach().cpu().squeeze().numpy().astype(np.uint8)
+        binary_mask = (mask_np > 0).astype(np.uint8)
+        skeleton = skeletonize(binary_mask).astype(np.uint8)
+        tubed_skeleton = dilation(skeleton, footprint=disk(2))
+
+        # refine with original mask: ensure the tubed skeleton doesn't 'leak' outside the actual structure
+        final_skeleton = tubed_skeleton.astype(
+            np.float32) * mask_np.astype(np.float32)
+
+        return torch.from_numpy(final_skeleton).unsqueeze(0).to(device)
+
+    def forward(self, logits: torch.Tensor, ground_truth_masks: torch.Tensor):
+        """
+        logits: (B, C, H, W) - segmentation network output logits
+        ground_truth_masks: (B, C, H, W) - ground truth segmentation mask (0 or 1)
+        C = 1 for binary segmentation in our case
+        """
+        probs = torch.sigmoid(logits)
+
+        skeleton_list = [self._skeletonize_sample(ground_truth_masks[i])
+                         for i in range(ground_truth_masks.shape[0])]
+        skeletons = torch.stack(skeleton_list)
+
+        intersection = (probs * skeletons).sum(dim=(2, 3))
+        ground_truth_sum = skeletons.sum(dim=(2, 3))
+
+        recall = (intersection + 1e-6) / (ground_truth_sum + 1e-6)
+        loss = 1.0 - recall
+
+        return loss.mean()
+
+
+class SkeletonRecallDiceBCELoss(nn.Module):
+    def __init__(self, skeleton_recall_weight: float, dice_weight: float, upsample_lowres_logits: tuple[int, int] | None = None):
+        super(SkeletonRecallDiceBCELoss, self).__init__()
+
+        self.skeleton_recall_loss = SkeletonRecallLoss2D()
+        self.dice_loss = SoftDiceLoss()
+        self.bce_loss = BCEWithLogitsLoss()
+
+        assert skeleton_recall_weight + \
+            dice_weight <= 1.0, "Sum of skeleton_recall_weight and dice_weight must be less than or equal to 1.0"
+        assert skeleton_recall_weight >= 0.0 and dice_weight >= 0.0, "Weights must be non-negative"
+
+        self.skeleton_recall_weight = skeleton_recall_weight
+        self.dice_weight = dice_weight
+        self.upsample_lowres_logits = upsample_lowres_logits
+
+    def forward(self, low_res_logits: torch.Tensor, ground_truth_masks: torch.Tensor) -> torch.Tensor:
+        """
+        low_res_logits: predicted low-res mask logits, shape (B, 1, H_lowres, W_lowres)
+        ground_truth_masks: binary 0/1, shape (B, 1, H_original, W_original)
+        """
+        if self.upsample_lowres_logits is not None:
+            low_res_logits = F.interpolate(
+                low_res_logits, size=self.upsample_lowres_logits, mode='bilinear', align_corners=False)
+
+        ground_truth_masks = ground_truth_masks.to(
+            device=low_res_logits.device, dtype=torch.float32)
+        ground_truth_masks_resized = F.interpolate(ground_truth_masks, size=(
+            low_res_logits.shape[-2], low_res_logits.shape[-1]), mode='nearest')
+
+        skeleton_recall_loss_value = self.skeleton_recall_loss(
+            low_res_logits, ground_truth_masks_resized)
+        dice_loss_value = self.dice_loss(
+            low_res_logits, ground_truth_masks_resized)
+        bce_loss_value = self.bce_loss(
+            low_res_logits, ground_truth_masks_resized)
+
+        return (self.skeleton_recall_weight * skeleton_recall_loss_value) + \
+            (self.dice_weight * dice_loss_value) + \
+            (1 - self.skeleton_recall_weight - self.dice_weight) * bce_loss_value
 
 
 def hard_dice_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
