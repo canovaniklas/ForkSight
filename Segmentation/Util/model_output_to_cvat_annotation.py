@@ -8,6 +8,7 @@
 #   remove the background label from the task
 #   review and adjust annotations as needed
 
+import argparse
 from datetime import datetime
 import os
 import numpy as np
@@ -22,6 +23,8 @@ load_segmentation_env()
 
 RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
 SAM3_OUTPUT_DIR_NAME = os.getenv("SAM3_OUTPUT_DIR_NAME", "sam3_output")
+FINETUNED_SAM_OUTPUT_DIR_NAME = os.getenv(
+    "FINETUNED_SAM_OUTPUT_DIR_NAME", "finetuned_sam_output")
 
 if not RAW_DATA_DIR:
     raise ValueError("RAW_DATA_DIR environment variable is not set.")
@@ -31,8 +34,21 @@ CVAT_MASK_COLOR = load_as_tuple("CVAT_MASK_COLOR", "250,50,83", int)
 
 
 def main():
-    sam3_output_dir = Path(RAW_DATA_DIR) / SAM3_OUTPUT_DIR_NAME
-    output_zip_path = sam3_output_dir / \
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str,
+                        help="model used for segmentation", default="sam3")
+    args = parser.parse_args()
+    print(f"Generating CVAT annotations for model: {args.model}")
+
+    if args.model == "sam3":
+        output_dir = SAM3_OUTPUT_DIR_NAME
+    elif args.model == "finetuned_sam":
+        output_dir = FINETUNED_SAM_OUTPUT_DIR_NAME
+    else:
+        raise ValueError(f"Unknown model: {args.model}")
+
+    model_output_dir = Path(RAW_DATA_DIR) / output_dir
+    output_zip_path = model_output_dir / \
         f"cvat_annotations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
 
     color_map = {
@@ -49,7 +65,7 @@ def main():
         zipf.writestr("labelmap.txt", labelmap_content)
 
         filenames = []
-        for img_path in sam3_output_dir.glob("*.png"):
+        for img_path in model_output_dir.glob("*.png"):
             img = Image.open(str(img_path))
             arr = np.array(img)
 

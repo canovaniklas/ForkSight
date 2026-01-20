@@ -265,11 +265,11 @@ def hard_dice_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
 
 def hard_clDice(mask_predicted, mask_target):
     def cl_score(img, skeleton):
-        return np.sum(img * skeleton) / max(np.sum(skeleton), 1e-6)
+        return (np.sum(img * skeleton) + 1e-6) / (np.sum(skeleton) + 1e-6)
 
-    tprec = cl_score(mask_predicted, skeletonize(mask_target))
-    tsens = cl_score(mask_target, skeletonize(mask_predicted))
-    cl_dice = 2 * tprec * tsens / max(tprec + tsens, 1e-6)
+    tprec = cl_score(mask_target, skeletonize(mask_predicted))
+    tsens = cl_score(mask_predicted, skeletonize(mask_target))
+    cl_dice = (2 * tprec * tsens + 1e-6) / (tprec + tsens + 1e-6)
 
     return cl_dice, tprec, tsens
 
