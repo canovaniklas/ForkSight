@@ -1,6 +1,6 @@
 # creates a CVAT-compatible annotation ZIP from SAM3 output PNGs in the Segmentation Mask 1.1 format
 # workflow:
-#   create base annotations with sam3_zeroshot_segmentation
+#   create base annotations with sam3_zeroshot_segmentation or finetuned_sam_soi_segmentation (only for SoI patches) scripts
 #   create ZIP file with this script
 #   create a task in CVAT with two labels: "DNA" (250, 50, 83) and "background" (0, 0, 0)
 #   upload the ZIP file as annotations using the Segmentation Mask 1.1 format

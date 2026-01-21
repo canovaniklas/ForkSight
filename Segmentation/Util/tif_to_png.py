@@ -41,9 +41,21 @@ IN_IMAGES = [
     ("Z:\\imcrdata\\2025_Cyril_AraC\\20250602_Cyril_Lama\\LayersData\\highmag\\Tile Set (3)\\Tile_012-007-000000_0-000.tif", None),
 
     ("Z:\\imcrdata\\2024_Andrea_NBS1\\2024_Andrea_NBS1_R1\\20240407_Andrea_Red\\LayersData\\highmag\\Tile Set (6)\\Tile_006-012-000000_0-000.tif", (1766, 1121)),
+    ("Z:\\imcrdata\\2024_Andrea_NBS1\\2024_Andrea_NBS1_R1\\20240407_Andrea_Red\\LayersData\\highmag\\Tile Set (21)\\Tile_006-016-000000_0-000.tif", (3071, 2996)),
     ("Z:\\imcrdata\\2025_Dani_SMC1\\R1\\20250311_Dani_Funghi\\LayersData\\highmag\\Tile Set (6)\\Tile_014-005-000000_0-000.tif", (1892, 749)),
     ("Z:\\imcrdata\\2025_Dani_SMC1\\R1\\20250311_Dani_Funghi\\LayersData\\highmag\\Tile Set (25)\\Tile_009-003-000000_0-000.tif", (2255, 1767)),
     ("Z:\\imcrdata\\2025_Veronica_Lamin\\2024_Veronica_Lamin\\2024_Veronica_Lamin_R2\\20240813_Veronica_Blue\\LayersData\\highmag\\Tile Set (22)\\Tile_004-015-000000_0-000.tif", (2659, 926)),
+    ("Z:\\imcrdata\\2025_Veronica_Lamin\\2024_Veronica_Lamin\\2024_Veronica_Lamin_R2\\20240813_Veronica_Blue\\LayersData\\highmag\\Tile Set (29)\\Tile_014-001-000000_0-000.tif", (2736, 314)),
+    ("Z:\\imcrdata\\2024_Andrea_NBS1\\2024_Andrea_NBS1_R2\\20240425_Andrea_lila\\LayersData\\highmag\\Tile Set (9)\\Tile_006-012-000000_0-000.tif", (2435, 593)),
+    ("Z:\\imcrdata\\2024_Andrea_NBS1\\2024_Andrea_NBS1_R2\\20240425_Andrea_lila\\LayersData\\highmag\\Tile Set (15)\\Tile_004-009-000000_0-000.tif", (638, 750)),
+    ("Z:\\imcrdata\\2025_Dani_SMC1\\R2\\20251027_Dani_Balder\\LayersData\\highmag\\Tile Set (15)\\Tile_001-011-000000_0-000.tif", (2067, 3232)),
+    ("Z:\\imcrdata\\2025_Dani_SMC1\\R2\\20250819_Dani_Odin\\LayersData\\highmag\\Tile Set (23)\\Tile_005-005-000000_0-000.tif", (928, 1115)),
+    ("Z:\\imcrdata\\2025_Dani_SMC1\\R2\\20250923_Dani_Skaldi\\LayersData\\highmag\\Tile Set (27)\\Tile_014-012-000000_0-000.tif", (1335, 1000)),
+    ("Z:\\imcrdata\\2025_Dani_SMC1\\R2\\20250929_Dani_Tyr\\LayersData\\highmag\\Tile Set (7)\\Tile_002-008-000000_0-000.tif", (802, 3644)),
+    ("Z:\\imcrdata\\2025_Dani_SMC1\\R2\\20251023_Dani_Thor\\LayersData\\highmag\\Tile Set (3)\\Tile_010-014-000000_0-000.tif", (3188, 2699)),
+    ("Z:\\imcrdata\\2025_Dani_SMC1\\R2\\20251023_Dani_Thor\\LayersData\\highmag\\Tile Set (2)\\Tile_007-002-000000_0-000.tif", (3383, 3385)),
+    ("Z:\\imcrdata\\2025_Veronica_Lamin\\2024_Veronica_Lamin\\2024_Veronica_Lamin_R1\\20240606_Veronica_Sample1\\LayersData\\highmag\\Tile Set (11)\\Tile_011-005-000000_0-000.tif", (752, 1508)),
+    ("Z:\\imcrdata\\2025_Veronica_Lamin\\2025_Veronica_G9ai\\R1\\20250409_Veronica_Apple\\LayersData\\highmag\\Tile Set (12)\\Tile_009-012-000000_0-000.tif", (205, 1547))
 ]
 
 
