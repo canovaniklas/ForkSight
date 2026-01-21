@@ -32,7 +32,7 @@ def remove_small_objects_from_batch(masks: torch.Tensor) -> torch.Tensor:
     :return: Tensor of same shape, with small connected components removed
     """
 
-    assert masks.ndim == 4 and masks.shape[1] == 1, "Expected mask shape (B, 1, H, W)"
+    assert masks.ndim == 4 and masks.shape[1] == 1, f"Expected mask shape (B, 1, H, W), got {masks.shape}"
 
     B = masks.shape[0]
     output = torch.zeros_like(masks)
@@ -93,16 +93,7 @@ def extract_mask_elements_bboxes(mask: torch.Tensor) -> list[tuple[int, int, int
     boxes = []
     for component_idx in range(1, num_components + 1):
         ys, xs = np.where(labeled_mask == component_idx)
-
-        if ys.size == 0:
-            continue
-
-        if (
-            POSTPROCESSING_MIN_OBJ_SIZE is not None
-            and ys.size < POSTPROCESSING_MIN_OBJ_SIZE
-        ):
-            continue
-
+        
         x1 = int(xs.min())
         y1 = int(ys.min())
         x2 = int(xs.max())
@@ -113,16 +104,19 @@ def extract_mask_elements_bboxes(mask: torch.Tensor) -> list[tuple[int, int, int
     return boxes
 
 
-def postprocess_segmentation_masks(masks: torch.Tensor, grid_size: tuple[int, int], original_input_patch_img_size: tuple[int, int]) -> tuple[torch.Tensor, list[tuple[int, int, int, int]]]:
+def postprocess_segmentation_masks(masks: torch.Tensor, grid_size: tuple[int, int],
+                                   original_input_patch_img_size: tuple[int, int],
+                                   remove_small_objects: bool = True) -> tuple[torch.Tensor, list[tuple[int, int, int, int]]]:
     '''
     :param masks: batch of segmentation masks, shape (B, 1, H, W), where B = grid_rows * grid_cols (e.g. 16 for 4x4 grid) of ONE image
     :param grid_size: tuple of (grid_rows, grid_cols) indicating how patches were cut from the original full image
     :param original_input_patch_img_size: tuple of (H, W) indicating the original size of the individual input image patches before resizing for SAM input
     :return: tuple of the stitched masks (with small elements removed) tensor and list of bounding boxes for each mask element
     '''
-    cleaned_masks = remove_small_objects_from_batch(masks)
+    cleaned_masks = remove_small_objects_from_batch(
+        masks) if remove_small_objects else masks
     stitched_mask = stitch_mask_tiles(
         cleaned_masks, grid_size, original_input_patch_img_size)
     boxes = extract_mask_elements_bboxes(stitched_mask)
 
-    return (stitched_mask, boxes)
+    return stitched_mask, boxes
