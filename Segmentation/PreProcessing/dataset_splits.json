@@ -32,5 +32,51 @@
       "20250409_veronica_apple_tileset_14_tile_014_006.png",
       "20250602_cyril_lama_tileset_3_tile_012_007.png"
     ]
+  },
+  "SAM_LoRA_Augmented_Final_SoI": {
+    "train": [
+      "20240407_andrea_red_tileset_6_tile_006_012_soi.png",
+      "20240407_andrea_red_tileset_18_tile_007_016.png",
+      "20240425_andrea_lila_tileset_22_tile_004_009.png",
+      "20240523_andrea_orange_tileset_17_tile_016_003.png",
+      "20240529_veronica_sample5_tileset_12_tile_001_003.png",
+      "20240613_andrea_green_tileset_15_tile_006_011.png",
+      "20240912_andrea_yellow_tileset_14_tile_006_004.png",
+      "20250107_filip_zurich_tileset_13_tile_002_006.png",
+      "20250108_filip_basel_tileset_3_tile_005_015.png",
+      "20250305_dani_margherita_tileset_14_tile_016_003.png",
+      "20250311_dani_funghi_tileset_25_tile_009_003_soi.png",
+      "20250528_cyril_alpaka_tileset_21_tile_016_013.png",
+      "20250708_vero_larch_part2_tileset_8_tile_009_011.png",
+      "20250709_veronica_cedar_tileset_15_tile_006_012.png",
+      "20250808_andrea_magenta_tileset_6_tile_005_010.png",
+      "20250811_dani_vegetariana_tileset_2_tile_005_009.png",
+      "20250812_jana_ant_tileset_24_tile_002_006.png",
+      "20250818_dani_bianca_tileset_12_tile_015_001.png",
+      "20250819_dani_odin_tileset_6_tile_011_016.png",
+      "20250915_jana_wasp_tileset_11_tile_010_012.png",
+      "20250929_dani_tyr_tileset_9_tile_006_002.png",
+      "20251023_dani_thor_tileset_13_tile_014_008.png",
+      "20240407_andrea_red_tileset_21_tile_006_016_soi.png",
+      "20240425_andrea_lila_tileset_15_tile_004_009_soi.png",
+      "20240813_veronica_blue_tileset_29_tile_014_001_soi.png",
+      "20250409_veronica_apple_tileset_12_tile_009_012_soi.png",
+      "20250819_dani_odin_tileset_23_tile_005_005_soi.png",
+      "20250923_dani_skaldi_tileset_27_tile_014_012_soi.png",
+      "20250929_dani_tyr_tileset_7_tile_002_008_soi.png",
+      "20251023_dani_thor_tileset_2_tile_007_002_soi.png",
+      "20251027_dani_balder_tileset_15_tile_001_011_soi.png"
+    ],
+    "test": [
+      "20240425_andrea_lila_tileset_14_tile_014_015.png",
+      "20240911_andrea_black_tileset_14_tile_007_004.png",
+      "20240813_veronica_blue_tileset_22_tile_004_015_soi.png",
+      "20250311_dani_funghi_tileset_6_tile_014_005_soi.png",
+      "20250409_veronica_apple_tileset_14_tile_014_006.png",
+      "20250602_cyril_lama_tileset_3_tile_012_007.png",
+      "20240425_andrea_lila_tileset_9_tile_006_012_soi.png",
+      "20251023_dani_thor_tileset_3_tile_010_014_soi.png",
+      "20240606_veronica_sample1_tileset_11_tile_011_005_soi.png"
+    ]
   }
 }
