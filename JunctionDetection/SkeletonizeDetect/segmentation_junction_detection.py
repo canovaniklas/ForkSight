@@ -5,8 +5,10 @@ from skan.csr import skeleton_to_csgraph, summarize, Skeleton
 import networkx as nx
 
 
-MIN_BRANCH_LENGTH = 100
-MIN_BRIDGE_LENGTH = 20
+MIN_BRANCH_LENGTH = 75
+MIN_JUNCTION_CONNECTOR_LENGTH = 10
+MAX_JUNCTION_CONNECTOR_LENGTH = 20
+MIN_TERMINAL_BRANCH_LENGTH = 30
 
 
 def skeletonize_mask(segmentation_mask: torch.Tensor) -> np.ndarray:
@@ -20,7 +22,46 @@ def skeletonize_mask(segmentation_mask: torch.Tensor) -> np.ndarray:
     return skeletonize(binary_mask).astype(np.uint8)
 
 
-def get_graph_with_degrees(skeleton: np.ndarray):
+def prune_skeleton(skeleton: np.ndarray) -> np.ndarray:
+    """
+    Removes short terminal branches (spurs), these are likely artifacts
+    """
+    skel_obj = Skeleton(skeleton)
+    stats = summarize(skel_obj)
+
+    _, _, degrees = get_graph_coordinates_degrees(skeleton)
+
+    # Find paths that end in a degree-1 node and are too short
+    bad_paths = []
+    for i, row in stats.iterrows():
+        u, v = int(row['node-id-src']), int(row['node-id-dst'])
+        if (degrees[u] == 1 or degrees[v] == 1) and row['branch-distance'] < MIN_TERMINAL_BRANCH_LENGTH:
+            bad_paths.append(i)
+
+    # Zero out the pixels belonging to short terminal branches
+    pruned_skeleton = skeleton.copy()
+    for path_idx in bad_paths:
+        row = stats.loc[path_idx]
+        u, v = int(row['node-id-src']), int(row['node-id-dst'])
+        coords = skel_obj.path_coordinates(path_idx)
+
+        # Identify junction coordinates to preserve them - don't zero out pixel where spur attaches to skeleton
+        junction_coords = []
+        if degrees[u] > 2:
+            junction_coords.append(skel_obj.coordinates[u].astype(int))
+        if degrees[v] > 2:
+            junction_coords.append(skel_obj.coordinates[v].astype(int))
+
+        for r, c in coords.astype(int):
+            is_junction = any(np.array_equal([r, c], j_coord)
+                              for j_coord in junction_coords)
+            if not is_junction:
+                pruned_skeleton[r, c] = 0
+
+    return pruned_skeleton
+
+
+def get_graph_coordinates_degrees(skeleton: np.ndarray):
     '''
     Convert skeleton to graph and compute node degrees
     skeleton: np.ndarray of shape (H, W)
@@ -35,31 +76,22 @@ def get_graph_with_degrees(skeleton: np.ndarray):
 def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarray, degrees: np.ndarray) -> np.ndarray:
     skel_obj = Skeleton(skeleton)
     skel_stats = summarize(skel_obj)
+    skel_stats = skel_stats[skel_stats['node-id-src']
+                            != skel_stats['node-id-dst']]
 
-    # 1. Find all nodes in cycles (loops)
+    # find all nodes in cycles
     nx_graph = nx.from_scipy_sparse_array(skel_obj.graph)
-    nodes_in_cycles = set()
-    try:
-        # Use cycle_basis to find all loops in the graph
-        cycles = nx.cycle_basis(nx_graph)
-        for cycle in cycles:
-            nodes_in_cycles.update(cycle)
-    except:
-        pass
+    nodes_in_cycles = {n for cycle in nx.cycle_basis(nx_graph) for n in cycle}
 
     valid_coords = []
     nodes_handled = set()
-    BRIDGE_MAX_SIZE = 15  # Consolidate nodes closer than this
 
-    # 2. Cleanup stats
-    clean_stats = skel_stats[skel_stats['node-id-src']
-                             != skel_stats['node-id-dst']].copy()
-
-    # Pass 1: Handle 4-way artifacts and Bridges
-    for _, branch in clean_stats.iterrows():
+    # handle 4-way artifacts and junctions connected by a short branch (H shape)
+    for _, branch in skel_stats.iterrows():
         n1, n2 = int(branch['node-id-src']), int(branch['node-id-dst'])
 
-        if (degrees[n1] > 2 and degrees[n2] > 2 and branch['branch-distance'] < BRIDGE_MAX_SIZE):
+        # check if short branch connects two junctions
+        if (degrees[n1] > 2 and degrees[n2] > 2 and branch['branch-distance'] < MAX_JUNCTION_CONNECTOR_LENGTH):
             if n1 in nodes_handled or n2 in nodes_handled:
                 continue
 
@@ -68,61 +100,58 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
                 nodes_handled.update([n1, n2])
                 continue
 
-            # Check for 4 long arms
-            cluster_arms = clean_stats[((clean_stats['node-id-src'].isin([n1, n2])) |
-                                        (clean_stats['node-id-dst'].isin([n1, n2]))) &
-                                       (clean_stats.index != branch.name)]
+            # Check significant arms for both junctions (junction connector ends)
+            cluster_arms = skel_stats[((skel_stats['node-id-src'].isin([n1, n2])) |
+                                       (skel_stats['node-id-dst'].isin([n1, n2]))) &
+                                      (skel_stats.index != branch.name)]
 
-            sig_arms = sum(1 for _, arm in cluster_arms.iterrows()
-                           if arm['branch-distance'] >= MIN_BRANCH_LENGTH)
+            nof_significant_arms = sum(1 for _, arm in cluster_arms.iterrows()
+                                       if arm['branch-distance'] >= MIN_BRANCH_LENGTH)
 
-            if sig_arms >= 4:
-                # Store the actual coordinate (y, x)
+            # if the cluster connected by the short branch has at least 4 significant arms, keep as junction
+            if nof_significant_arms >= 4:
                 midpoint = (
                     skel_obj.coordinates[n1] + skel_obj.coordinates[n2]) / 2
                 valid_coords.append(midpoint)
-                nodes_handled.update([n1, n2])
-            else:
-                nodes_handled.update([n1, n2])
 
-    # Pass 2: Handle standard 3-way junctions
+            nodes_handled.update([n1, n2])
+
+    # handle standard 3-way and 4-way junctions
     for j_idx in junction_indices:
         if j_idx in nodes_handled or j_idx in nodes_in_cycles:
             continue
 
-        node_branches = clean_stats[(clean_stats['node-id-src'] == j_idx) |
-                                    (clean_stats['node-id-dst'] == j_idx)]
+        node_branches = skel_stats[(skel_stats['node-id-src'] == j_idx) |
+                                   (skel_stats['node-id-dst'] == j_idx)]
 
-        # Strict check: An arm is ONLY significant if it is long
-        sig_arms = 0
+        # an arm is only significant if it is long enough or leads to a distant junction
+        nof_significant_arms = 0
         for _, branch in node_branches.iterrows():
             if branch['branch-distance'] >= MIN_BRANCH_LENGTH:
-                sig_arms += 1
-            # If it leads to a distant junction, it's also valid
+                nof_significant_arms += 1
             else:
                 u, v = int(branch['node-id-src']), int(branch['node-id-dst'])
                 other = v if u == j_idx else u
-                if degrees[other] > 2 and branch['branch-distance'] > BRIDGE_MAX_SIZE:
-                    sig_arms += 1
+                if degrees[other] > 2 and branch['branch-distance'] > MAX_JUNCTION_CONNECTOR_LENGTH:
+                    nof_significant_arms += 1
 
-        if sig_arms >= 3:
+        if nof_significant_arms >= 3:
             valid_coords.append(skel_obj.coordinates[j_idx])
 
     if not valid_coords:
         return np.empty((0, 2))
-
-    # Return (N, 2) array of coordinates
     return np.array(valid_coords)
 
 
 def detect_junctions_in_segmentation_mask(segmentation_mask: torch.Tensor) -> np.ndarray:
     skeleton = skeletonize_mask(segmentation_mask)
-    _, _, degrees = get_graph_with_degrees(skeleton)
+    skeleton = prune_skeleton(skeleton)
 
-    # Get all junction candidates
+    _, _, degrees = get_graph_coordinates_degrees(skeleton)
+
+    # get indices of junction nodes (degree > 2)
     junction_indices = np.where(degrees > 2)[0]
-
-    # This now returns actual COORDINATES (y, x), not indices
+    # filter out junctions based on branch lengths, cycles, and artifacts
     filtered_coords = filter_junctions_by_length(
         skeleton, junction_indices, degrees)
 
@@ -143,6 +172,6 @@ def detect_junctions_in_batched_segmentation_masks(segmentation_masks: torch.Ten
     batch_junction_coords = []
     for i in range(segmentation_masks.shape[0]):
         mask = segmentation_masks[i]
-        junction_coords = detect_junctions_in_segmentation_mask(mask)
+        junction_coords, _ = detect_junctions_in_segmentation_mask(mask)
         batch_junction_coords.append(junction_coords)
     return np.array(batch_junction_coords)
