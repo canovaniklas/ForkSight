@@ -191,7 +191,7 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "dice_loss_weight": SAM_LORA_DICE_LOSS_WEIGHT,
             "cl_dice_skeletonize_iterations": SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS,
             "skeleton_recall_loss_weight": SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT,
-            "loss_function": SkeletonRecallDiceBCELoss.__class__.__name__ if SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT > 0.0 else ClDiceDiceBCELoss.__class__.__name__,
+            "loss_function": SkeletonRecallDiceBCELoss.__name__ if SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT > 0.0 else ClDiceDiceBCELoss.__name__,
         },
     )
 

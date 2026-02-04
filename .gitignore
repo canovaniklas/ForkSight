@@ -8,4 +8,4 @@ wandb/
 *.pt
 
 Segmentation/Data/*
-JunctionDetection/Evaluation/*.png
+*.png
