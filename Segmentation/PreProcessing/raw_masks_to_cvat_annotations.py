@@ -1,6 +1,5 @@
-# creates a CVAT-compatible annotation ZIP from SAM3 output PNGs in the Segmentation Mask 1.1 format
+# creates a CVAT-compatible annotation ZIP from the masks in RAW_DATA_DIR/HIGHRES_MASK_DIR_NAME
 # workflow:
-#   create base annotations with sam3_zeroshot_segmentation or finetuned_sam_soi_segmentation (only for SoI patches) scripts
 #   create ZIP file with this script
 #   create a task in CVAT with two labels: "DNA" (250, 50, 83) and "background" (0, 0, 0)
 #   upload the ZIP file as annotations using the Segmentation Mask 1.1 format
@@ -8,7 +7,6 @@
 #   remove the background label from the task
 #   review and adjust annotations as needed
 
-import argparse
 from datetime import datetime
 import os
 import numpy as np
@@ -17,14 +15,12 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 
-from .env_utils import load_as_tuple, load_segmentation_env
+from Segmentation.Util.env_utils import load_as_tuple, load_segmentation_env
 
 load_segmentation_env()
 
 RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
-SAM3_OUTPUT_DIR_NAME = os.getenv("SAM3_OUTPUT_DIR_NAME", "sam3_output")
-FINETUNED_SAM_OUTPUT_DIR_NAME = os.getenv(
-    "FINETUNED_SAM_OUTPUT_DIR_NAME", "finetuned_sam_output")
+HIGHRES_MASK_DIR_NAME = os.getenv("HIGHRES_MASK_DIR_NAME", "masks_4096")
 
 if not RAW_DATA_DIR:
     raise ValueError("RAW_DATA_DIR environment variable is not set.")
@@ -34,21 +30,8 @@ CVAT_MASK_COLOR = load_as_tuple("CVAT_MASK_COLOR", "250,50,83", int)
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str,
-                        help="model used for segmentation", default="sam3")
-    args = parser.parse_args()
-    print(f"Generating CVAT annotations for model: {args.model}")
-
-    if args.model == "sam3":
-        output_dir = SAM3_OUTPUT_DIR_NAME
-    elif args.model == "finetuned_sam":
-        output_dir = FINETUNED_SAM_OUTPUT_DIR_NAME
-    else:
-        raise ValueError(f"Unknown model: {args.model}")
-
-    model_output_dir = Path(RAW_DATA_DIR) / output_dir
-    output_zip_path = model_output_dir / \
+    masks_dir = Path(RAW_DATA_DIR) / HIGHRES_MASK_DIR_NAME
+    output_zip_path = masks_dir / \
         f"cvat_annotations_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
 
     color_map = {
@@ -65,7 +48,7 @@ def main():
         zipf.writestr("labelmap.txt", labelmap_content)
 
         filenames = []
-        for img_path in model_output_dir.glob("*.png"):
+        for img_path in masks_dir.glob("*.png"):
             img = Image.open(str(img_path))
             arr = np.array(img)
 

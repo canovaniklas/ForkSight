@@ -1,0 +1,187 @@
+"""
+Generate Gaussian heatmaps from CVAT 1.1 point annotations.
+
+This script processes images, segmentation masks, and CVAT XML point annotations
+to create weighted heatmaps centered on annotated points. The heatmaps use a
+Gaussian weighting function and can be used for loss function weighting.
+"""
+
+import os
+import shutil
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Dict, List, Tuple
+
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+import torch
+
+from Segmentation.Util.env_utils import load_as, load_segmentation_env
+
+
+load_segmentation_env()
+
+SEED = load_as("SEED", int, 42)
+RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
+HIGHRES_IMG_DIR_NAME = os.getenv("HIGHRES_IMG_DIR_NAME", "images_4096")
+HIGHRES_MASK_DIR_NAME = os.getenv("HIGHRES_MASK_DIR_NAME", "masks_4096")
+
+IMAGE_DIR = Path(RAW_DATA_DIR) / HIGHRES_IMG_DIR_NAME
+MASK_DIR = Path(RAW_DATA_DIR) / HIGHRES_MASK_DIR_NAME
+OUTPUT_DIR = Path(RAW_DATA_DIR) / "heatmaps"
+VISUALIZATION_DIR = Path(RAW_DATA_DIR) / "heatmap_visualizations"
+
+if OUTPUT_DIR.exists():
+    shutil.rmtree(OUTPUT_DIR)
+OUTPUT_DIR.mkdir(parents=True)
+if VISUALIZATION_DIR.exists():
+    shutil.rmtree(VISUALIZATION_DIR)
+VISUALIZATION_DIR.mkdir(parents=True)
+
+CVAT_XML_PATH = "C:\\Users\\juhe9\\repos\\MasterThesis\\ForkSight\\Segmentation\\Data\\RawData\\cvat\\20260204_cvat_1.1\\annotations.xml"
+
+SIGMA = 30.0
+CLIP_THRESHOLD = 0.1
+RADIUS_MULTIPLIER = 3.0
+
+
+def parse_cvat_xml(xml_path: str) -> Dict[str, List[Tuple[float, float]]]:
+    """
+    Parse CVAT 1.1 XML file and extract point annotations per image.
+    """
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    points_per_image = {}
+
+    for image_elem in root.findall('.//image'):
+        image_name = image_elem.get('name')
+        points = []
+
+        for points_elem in image_elem.findall('.//points'):
+            points_str = points_elem.get('points')
+            if points_str:
+                coords = points_str.strip().split(',')
+                if len(coords) == 2:
+                    x, y = float(coords[0]), float(coords[1])
+                    points.append((x, y))
+
+        if points:
+            points_per_image[image_name] = points
+
+    return points_per_image
+
+
+def create_gaussian_heatmap(image_shape: Tuple[int, int], points: List[Tuple[float, float]]) -> np.ndarray:
+    """
+    Create a Gaussian heatmap from a list of points.
+    The Gaussian function is: Y(u,v) = exp(-((u-x)^2 + (v-y)^2) / (2*SIGMA^2))
+    """
+    height, width = image_shape
+    heatmap = np.zeros((height, width), dtype=np.float32)
+
+    radius = int(np.ceil(RADIUS_MULTIPLIER * SIGMA))
+
+    for x, y in points:
+        x_int, y_int = int(round(x)), int(round(y))
+
+        x_min = max(0, x_int - radius)
+        x_max = min(width, x_int + radius + 1)
+        y_min = max(0, y_int - radius)
+        y_max = min(height, y_int + radius + 1)
+
+        u = np.arange(x_min, x_max)
+        v = np.arange(y_min, y_max)
+        uu, vv = np.meshgrid(u, v)
+
+        gaussian = np.exp(-((uu - x)**2 + (vv - y)**2) / (2 * SIGMA**2))
+
+        gaussian[gaussian < CLIP_THRESHOLD] = 0
+
+        heatmap[y_min:y_max, x_min:x_max] = np.maximum(
+            heatmap[y_min:y_max, x_min:x_max],
+            gaussian
+        )
+
+    return heatmap
+
+
+def visualize_heatmap_overlay(
+    image_path: Path,
+    mask_path: Path,
+    heatmap: np.ndarray,
+    output_path: Path
+):
+    image = Image.open(image_path).convert('RGB')
+    mask = Image.open(mask_path)
+
+    image_np = np.array(image)
+    mask_np = np.array(mask)
+
+    _, ax = plt.subplots(1, 1, figsize=(12, 12))
+
+    ax.imshow(image_np)
+
+    mask_overlay = np.zeros((*mask_np.shape, 4))
+    mask_overlay[mask_np > 0] = [0.0, 1.0, 1.0, 0.6]
+    ax.imshow(mask_overlay)
+
+    im = ax.imshow(heatmap, cmap='hot', alpha=0.5,
+                   interpolation='bilinear', vmin=0, vmax=1)
+
+    ax.axis('off')
+
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=600, bbox_inches='tight')
+    plt.close()
+
+
+def process_images():
+    print(f"Loading CVAT annotations from: {CVAT_XML_PATH}")
+
+    points_per_image = parse_cvat_xml(CVAT_XML_PATH)
+    print(f"Found {len(points_per_image)} annotated images in XML")
+
+    # Get all images in the image directory
+    image_files = sorted(IMAGE_DIR.glob('*.png'))
+    print(f"Found {len(image_files)} images in directory")
+
+    for image_path in image_files:
+        image_name = image_path.name
+        print(f"\nProcessing: {image_name}")
+
+        points = points_per_image.get(image_name, [])
+        print(f"  Points: {len(points)}")
+
+        with Image.open(image_path) as img:
+            width, height = img.size
+
+        if len(points) > 0:
+            heatmap = create_gaussian_heatmap(
+                image_shape=(height, width), points=points)
+        else:
+            # Create zero heatmap if no points annotations found
+            heatmap = np.zeros((height, width), dtype=np.float32)
+
+        heatmap_filename = Path(image_name).stem + '_heatmap.npy'
+        heatmap_path = OUTPUT_DIR / heatmap_filename
+        np.save(heatmap_path, heatmap)
+
+        viz_filename = Path(image_name).stem + '_visualization.png'
+        viz_path = VISUALIZATION_DIR / viz_filename
+        visualize_heatmap_overlay(
+            image_path=image_path,
+            mask_path=MASK_DIR / image_name,
+            heatmap=heatmap,
+            output_path=viz_path
+        )
+
+
+if __name__ == "__main__":
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+
+    process_images()
