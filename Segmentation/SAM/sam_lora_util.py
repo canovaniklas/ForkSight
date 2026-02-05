@@ -74,9 +74,12 @@ class BCEWithLogitsLoss(nn.Module):
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor, heatmap_weights: torch.Tensor | None = None) -> torch.Tensor:
         pixel_bce = self.bce(logits, targets)
+        pixel_bce_flat = pixel_bce.view(pixel_bce.shape[0], -1)
         if heatmap_weights is not None:
-            pixel_bce = pixel_bce * (1.0 + heatmap_weights)
-        sample_bce = pixel_bce.view(pixel_bce.shape[0], -1).mean(dim=1)
+            w = (1.0 + heatmap_weights).view(heatmap_weights.shape[0], -1)
+            sample_bce = (pixel_bce_flat * w).sum(dim=1) / w.sum(dim=1)
+        else:
+            sample_bce = pixel_bce_flat.mean(dim=1)
         return sample_bce.mean()
 
 
