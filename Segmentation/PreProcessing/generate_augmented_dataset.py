@@ -3,8 +3,7 @@ from pathlib import Path
 import random
 import shutil
 import json
-
-
+import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 import torch
@@ -24,16 +23,17 @@ DATASET_NAME = os.getenv("DATASET_NAME", "SAM_LoRA_Augmented")
 
 HIGHRES_IMG_DIR_NAME = os.getenv("HIGHRES_IMG_DIR_NAME", "images_4096")
 HIGHRES_MASK_DIR_NAME = os.getenv("HIGHRES_MASK_DIR_NAME", "masks_4096")
+HIGHRES_HEATMAP_DIR_NAME = os.getenv(
+    "HIGHRES_HEATMAP_DIR_NAME", "heatmaps_4096")
 
-LOWRES_IMG_PATCHES_DIR_NAME = os.getenv(
-    "LOWRES_IMG_PATCHES_DIR_NAME", "img_patches_256")
-LOWRES_MASK_PATCHES_DIR_NAME = os.getenv(
-    "LOWRES_MASK_PATCHES_DIR_NAME", "mask_patches_256")
 HIGHRES_IMG_PATCHES_DIR_NAME = os.getenv(
     "HIGHRES_IMG_PATCHES_DIR_NAME", "img_patches_1024")
 HIGHRES_MASK_PATCHES_DIR_NAME = os.getenv(
     "HIGHRES_MASK_PATCHES_DIR_NAME", "mask_patches_1024")
-
+HIGHRES_HEATMAP_PATCHES_DIR_NAME = os.getenv(
+    "HIGHRES_HEATMAP_PATCHES_DIR_NAME", "heatmap_patches_1024")
+HEATMAP_VISUALIZATION_DIR_NAME = os.getenv(
+    "HEATMAP_VISUALIZATION_DIR_NAME", "heatmap_visualizations")
 
 DATASET_LOWRES_RESIZE = load_as_tuple(
     "DATASET_LOWRES_RESIZE", "1024,1024", int)
@@ -44,6 +44,9 @@ DATASET_DISTORT_GRID_SIZE = load_as_tuple(
     "DATASET_DISTORT_GRID_SIZE", "4,4", int)
 DATASET_RANDOM_CROP_SIZE = load_as_tuple(
     "DATASET_RANDOM_CROP_SIZE", "2048,2048", int)
+
+DATASET_SAVE_HEATMAP_VISUALIZATIONS = load_as(
+    "DATASET_SAVE_HEATMAP_VISUALIZATIONS", bool, False)
 
 if not RAW_DATA_DIR or not DATASETS_DIR:
     raise ValueError(
@@ -63,24 +66,30 @@ def load_png_as_tensor(path: Path) -> torch.Tensor:
     return transform(img)
 
 
-def grid_distort(img: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    if img.dim() != 3:
-        raise ValueError(f"Expected (C,H,W), got {tuple(img.shape)}")
-    if img.shape != mask.shape:
-        raise ValueError(
-            f"Image and mask must have the same shape, got {tuple(img.shape)} and {tuple(mask.shape)}")
+def grid_distort(*tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    """Apply the same random grid distortion to all input tensors.
+    All tensors must share the same spatial dimensions (H, W) but may differ in channels."""
+    if not tensors:
+        raise ValueError("At least one tensor required")
+    ref = tensors[0]
+    if ref.dim() != 3:
+        raise ValueError(f"Expected (C,H,W), got {tuple(ref.shape)}")
+    for t in tensors[1:]:
+        if t.shape[-2:] != ref.shape[-2:]:
+            raise ValueError(
+                f"Spatial dimensions must match: {tuple(ref.shape[-2:])} vs {tuple(t.shape[-2:])}")
 
-    _, H, W = img.shape
+    _, H, W = ref.shape
     ny, nx = DATASET_DISTORT_GRID_SIZE
     if ny < 2 or nx < 2:
-        return img, mask
+        return tensors
 
-    ys, xs = torch.linspace(-1, 1, H, device=img.device,
-                            dtype=img.dtype), torch.linspace(-1, 1, W, device=img.device, dtype=img.dtype)
+    ys, xs = torch.linspace(-1, 1, H, device=ref.device,
+                            dtype=ref.dtype), torch.linspace(-1, 1, W, device=ref.device, dtype=ref.dtype)
     base_y, base_x = torch.meshgrid(ys, xs, indexing="ij")
     base_grid = torch.stack([base_x, base_y], dim=-1).unsqueeze(0)
     disp_coarse = torch.zeros(
-        (1, 2, ny, nx), device=img.device, dtype=img.dtype)
+        (1, 2, ny, nx), device=ref.device, dtype=ref.dtype)
     max_dy, max_dx = 2.0 * DATASET_MAX_DISTORT, 2.0 * DATASET_MAX_DISTORT
 
     for iy in range(1, ny - 1):
@@ -91,11 +100,13 @@ def grid_distort(img: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, t
     disp_full = torch.nn.functional.interpolate(disp_coarse, size=(
         H, W), mode="bicubic", align_corners=True).permute(0, 2, 3, 1)
     warped_grid = base_grid + disp_full
-    img_out = torch.nn.functional.grid_sample(img.unsqueeze(0), warped_grid, mode="bilinear",
+
+    results = []
+    for t in tensors:
+        out = torch.nn.functional.grid_sample(t.unsqueeze(0), warped_grid, mode="bilinear",
                                               padding_mode="border", align_corners=True)
-    mask_out = torch.nn.functional.grid_sample(mask.unsqueeze(0), warped_grid, mode="bilinear",
-                                               padding_mode="border", align_corners=True)
-    return img_out.squeeze(0).clamp(0.0, 1.0), mask_out.squeeze(0).clamp(0.0, 1.0)
+        results.append(out.squeeze(0).clamp(0.0, 1.0))
+    return tuple(results)
 
 
 def random_crop_pair(img: torch.Tensor, mask: torch.Tensor):
@@ -128,6 +139,30 @@ def save_tensor_as_png(tensor_img: torch.Tensor, tensor_mask: torch.Tensor, png_
     print(
         f"Saved augmented image and mask:\n{img_out_path.relative_to(out_dir_img.parent.parent)}\n{mask_out_path.relative_to(out_dir_mask.parent.parent)}")
     print()
+
+
+def save_heatmap(heatmap_tensor: torch.Tensor, png_path: Path, out_dir: Path, aug_name: str):
+    aug_suffix = f"_{aug_name}" if aug_name else ""
+    out_file_name = f"{png_path.stem}{aug_suffix}.npy"
+    out_path = out_dir / out_file_name
+    np.save(out_path, heatmap_tensor.squeeze(0).numpy())
+    print(
+        f"Saved augmented heatmap:\n{out_path.relative_to(out_dir.parent.parent)}")
+    print()
+
+
+def visualize_augmented_heatmap(img_tensor: torch.Tensor, hm_tensor: torch.Tensor, out_path: Path):
+    img_np = img_tensor.squeeze(0).numpy()
+    hm_np = hm_tensor.squeeze(0).numpy()
+
+    _, ax = plt.subplots(1, 1, figsize=(8, 8))
+    ax.imshow(img_np, cmap="gray")
+    im = ax.imshow(hm_np, cmap="hot", alpha=0.5,
+                   interpolation="bilinear", vmin=0, vmax=1)
+    ax.axis("off")
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close()
 
 
 def init_dir(folder_path: Path):
@@ -165,53 +200,93 @@ def augment_and_save():
     raw_data_dir = Path(RAW_DATA_DIR)
     raw_images_dir = raw_data_dir / HIGHRES_IMG_DIR_NAME
     raw_masks_dir = raw_data_dir / HIGHRES_MASK_DIR_NAME
+    raw_heatmaps_dir = raw_data_dir / HIGHRES_HEATMAP_DIR_NAME
 
     dataset_dir = Path(DATASETS_DIR) / DATASET_NAME
     train_dir, test_dir = dataset_dir / "train", dataset_dir / "test"
 
     init_dir(dataset_dir)
-    for subdir in [HIGHRES_IMG_DIR_NAME, HIGHRES_MASK_DIR_NAME]:
+    subdirs = [HIGHRES_IMG_DIR_NAME,
+               HIGHRES_MASK_DIR_NAME, HIGHRES_HEATMAP_DIR_NAME]
+    for subdir in subdirs:
         (train_dir / subdir).mkdir(parents=True, exist_ok=True)
         (test_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     train_image_paths, test_image_paths = get_train_test_split_image_paths(
         raw_images_dir)
 
+    if SAVE_HEATMAP_VISUALIZATIONS:
+        viz_dir = dataset_dir / HEATMAP_VISUALIZATION_DIR_NAME
+        viz_dir.mkdir(parents=True, exist_ok=True)
+
     print("training images: ", str([Path(p).name for p in train_image_paths]))
     print("testing images: ", str([Path(p).name for p in test_image_paths]))
 
-    for png_path in raw_images_dir.rglob("*.png"):
+    for png_path in list(raw_images_dir.rglob("*.png")):
         if str(png_path) not in train_image_paths and str(png_path) not in test_image_paths:
             continue
 
         img_tensor = load_png_as_tensor(png_path)
         mask_tensor = load_png_as_tensor(raw_masks_dir / png_path.name)
 
+        heatmap_npy_path = raw_heatmaps_dir / f"{png_path.stem}.npy"
+        heatmap_tensor = torch.from_numpy(
+            np.load(heatmap_npy_path)).unsqueeze(0)
+
+        # Precompute grid distortion with same displacement field for image, mask, and heatmap
+        distort_inputs = [img_tensor, mask_tensor, heatmap_tensor]
+        distorted = grid_distort(*distort_inputs)
+        img_dist, mask_dist, hm_dist = distorted[0], distorted[1], distorted[2]
+
         augmentations = [
-            (img_tensor, mask_tensor, None),
+            (img_tensor, mask_tensor, heatmap_tensor, None),
             (torch.flip(img_tensor, dims=(-1,)),
-             torch.flip(mask_tensor, dims=(-1,)), "hflip"),
+             torch.flip(mask_tensor, dims=(-1,)),
+             torch.flip(heatmap_tensor, dims=(-1,)), "hflip"),
             (torch.flip(img_tensor, dims=(-2,)),
-             torch.flip(mask_tensor, dims=(-2,)), "vflip"),
+             torch.flip(mask_tensor, dims=(-2,)),
+             torch.flip(heatmap_tensor, dims=(-2,)), "vflip"),
             (torch.rot90(img_tensor, k=1, dims=(-2, -1)),
-             torch.rot90(mask_tensor, k=1, dims=(-2, -1)), "rot90"),
+             torch.rot90(mask_tensor, k=1, dims=(-2, -1)),
+             torch.rot90(heatmap_tensor, k=1, dims=(-2, -1)), "rot90"),
             (torch.rot90(img_tensor, k=2, dims=(-2, -1)),
-             torch.rot90(mask_tensor, k=2, dims=(-2, -1)), "rot180"),
+             torch.rot90(mask_tensor, k=2, dims=(-2, -1)),
+             torch.rot90(heatmap_tensor, k=2, dims=(-2, -1)), "rot180"),
             (torch.rot90(img_tensor, k=3, dims=(-2, -1)),
-             torch.rot90(mask_tensor, k=3, dims=(-2, -1)), "rot270"),
+             torch.rot90(mask_tensor, k=3, dims=(-2, -1)),
+             torch.rot90(heatmap_tensor, k=3, dims=(-2, -1)), "rot270"),
             (img_tensor.clamp(1e-6, 1.0).pow(random.uniform(*DATASET_GAMMA_RANGE)),
-             mask_tensor, "gamma"),
-            (*grid_distort(img_tensor, mask_tensor), "griddistort")
+             mask_tensor, heatmap_tensor, "gamma"),
+            (img_dist, mask_dist, hm_dist, "griddistort"),
         ]
+
+        if SAVE_HEATMAP_VISUALIZATIONS:
+            viz_idx = random.randint(0, len(augmentations) - 1)
+            viz_img, _, viz_hm, viz_aug_name = augmentations[viz_idx]
+            aug_label = viz_aug_name if viz_aug_name else "original"
+            visualize_augmented_heatmap(
+                viz_img, viz_hm, viz_dir / f"{png_path.stem}_{aug_label}.png")
 
         train_test_dir = train_dir if str(
             png_path) in train_image_paths else test_dir
 
-        for img_aug, mask_aug, aug_name in augmentations:
+        for img_aug, mask_aug, hm_aug, aug_name in augmentations:
             out_dir_images = train_test_dir / HIGHRES_IMG_DIR_NAME
             out_dir_masks = train_test_dir / HIGHRES_MASK_DIR_NAME
             save_tensor_as_png(img_aug, mask_aug, png_path,
                                out_dir_images, out_dir_masks, aug_name)
+            save_heatmap(hm_aug, png_path, train_test_dir /
+                         HIGHRES_HEATMAP_DIR_NAME, aug_name)
+
+
+def create_patches_from_npy(npy_path: Path, patch_size: int = 1024) -> list[np.ndarray]:
+    heatmap = np.load(npy_path).astype(np.float32)
+    t = torch.from_numpy(heatmap).unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
+    patches = t.unfold(2, patch_size, patch_size).unfold(
+        3, patch_size, patch_size)
+    patches = patches.permute(
+        0, 2, 3, 1, 4, 5).reshape(-1, 1, patch_size, patch_size)
+    return [p.squeeze(0).numpy() for p in patches]
 
 
 def create_patches_and_save():
@@ -223,15 +298,17 @@ def create_patches_and_save():
     for base_dir in base_dirs:
         highres_images_dir = Path(base_dir) / HIGHRES_IMG_DIR_NAME
         highres_masks_dir = Path(base_dir) / HIGHRES_MASK_DIR_NAME
+        highres_heatmaps_dir = Path(base_dir) / HIGHRES_HEATMAP_DIR_NAME
 
-        # lowres_img_patches_dir = Path(base_dir) / LOWRES_IMG_PATCHES_DIR_NAME
-        # lowres_mask_patches_dir = Path(base_dir) / LOWRES_MASK_PATCHES_DIR_NAME
         highres_img_patches_dir = Path(base_dir) / HIGHRES_IMG_PATCHES_DIR_NAME
         highres_mask_patches_dir = Path(
             base_dir) / HIGHRES_MASK_PATCHES_DIR_NAME
+        highres_heatmap_patches_dir = Path(
+            base_dir) / HIGHRES_HEATMAP_PATCHES_DIR_NAME
 
-        for dir in [  # lowres_img_patches_dir, #lowres_mask_patches_dir,
-                highres_img_patches_dir, highres_mask_patches_dir]:
+        patch_dirs = [highres_img_patches_dir,
+                      highres_mask_patches_dir, highres_heatmap_patches_dir]
+        for dir in patch_dirs:
             init_dir(dir)
 
         for in_dir, out_dir in [(highres_images_dir, highres_img_patches_dir),
@@ -245,6 +322,13 @@ def create_patches_and_save():
                     patch_img.save(
                         out_dir / f"{png_file.stem}_patch_{i:02d}.png")
 
+        for npy_file in highres_heatmaps_dir.glob("*.npy"):
+            print(f"Cropping patches from heatmap {npy_file.name}")
+            patches = create_patches_from_npy(npy_file, patch_size=1024)
+            for i, patch in enumerate(patches):
+                np.save(highres_heatmap_patches_dir /
+                        f"{npy_file.stem}_patch_{i:02d}.npy", patch)
+
 
 def remove_highres_dirs():
     base_dirs = [
@@ -253,12 +337,10 @@ def remove_highres_dirs():
     ]
 
     for base_dir in base_dirs:
-        highres_images_dir = Path(base_dir) / HIGHRES_IMG_DIR_NAME
-        highres_masks_dir = Path(base_dir) / HIGHRES_MASK_DIR_NAME
-        if highres_images_dir.exists():
-            shutil.rmtree(highres_images_dir)
-        if highres_masks_dir.exists():
-            shutil.rmtree(highres_masks_dir)
+        for dir_name in [HIGHRES_IMG_DIR_NAME, HIGHRES_MASK_DIR_NAME, HIGHRES_HEATMAP_DIR_NAME]:
+            d = Path(base_dir) / dir_name
+            if d.exists():
+                shutil.rmtree(d)
 
 
 def main():

@@ -23,14 +23,32 @@ from Segmentation.Util.env_utils import load_as, load_segmentation_env
 load_segmentation_env()
 
 SEED = load_as("SEED", int, 42)
-RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
+RAW_DATA_DIR = os.getenv("RAW_DATA_DIR", None)
 HIGHRES_IMG_DIR_NAME = os.getenv("HIGHRES_IMG_DIR_NAME", "images_4096")
 HIGHRES_MASK_DIR_NAME = os.getenv("HIGHRES_MASK_DIR_NAME", "masks_4096")
 
+HIGHRES_HEATMAP_DIR_NAME = os.getenv(
+    "HIGHRES_HEATMAP_DIR_NAME", "heatmaps_4096")
+HEATMAP_VISUALIZATION_DIR_NAME = os.getenv(
+    "HEATMAP_VISUALIZATION_DIR_NAME", "heatmap_visualizations")
+
+DATASET_JUNCTION_WEIGHT_CVAT_XML_PATH = os.getenv(
+    "DATASET_JUNCTION_WEIGHT_CVAT_XML_PATH", None)
+DATASET_JUNCTION_WEIGHT_SIGMA = load_as(
+    "DATASET_JUNCTION_WEIGHT_SIGMA", float, 30.0)
+DATASET_JUNCTION_WEIGHT_CLIP_THRESHOLD = load_as(
+    "DATASET_JUNCTION_WEIGHT_CLIP_THRESHOLD", float, 0.1)
+DATASET_JUNCTION_WEIGHT_RADIUS_MULTIPLIER = load_as(
+    "DATASET_JUNCTION_WEIGHT_RADIUS_MULTIPLIER", float, 3.0)
+
+if RAW_DATA_DIR is None or DATASET_JUNCTION_WEIGHT_CVAT_XML_PATH is None:
+    raise ValueError(
+        "RAW_DATA_DIR and DATASET_JUNCTION_WEIGHT_CVAT_XML_PATH environment variables must be set")
+
 IMAGE_DIR = Path(RAW_DATA_DIR) / HIGHRES_IMG_DIR_NAME
 MASK_DIR = Path(RAW_DATA_DIR) / HIGHRES_MASK_DIR_NAME
-OUTPUT_DIR = Path(RAW_DATA_DIR) / "heatmaps"
-VISUALIZATION_DIR = Path(RAW_DATA_DIR) / "heatmap_visualizations"
+OUTPUT_DIR = Path(RAW_DATA_DIR) / HIGHRES_HEATMAP_DIR_NAME
+VISUALIZATION_DIR = Path(RAW_DATA_DIR) / HEATMAP_VISUALIZATION_DIR_NAME
 
 if OUTPUT_DIR.exists():
     shutil.rmtree(OUTPUT_DIR)
@@ -38,12 +56,6 @@ OUTPUT_DIR.mkdir(parents=True)
 if VISUALIZATION_DIR.exists():
     shutil.rmtree(VISUALIZATION_DIR)
 VISUALIZATION_DIR.mkdir(parents=True)
-
-CVAT_XML_PATH = "C:\\Users\\juhe9\\repos\\MasterThesis\\ForkSight\\Segmentation\\Data\\RawData\\cvat\\20260204_cvat_1.1\\annotations.xml"
-
-SIGMA = 30.0
-CLIP_THRESHOLD = 0.1
-RADIUS_MULTIPLIER = 3.0
 
 
 def parse_cvat_xml(xml_path: str) -> Dict[str, List[Tuple[float, float]]]:
@@ -81,7 +93,8 @@ def create_gaussian_heatmap(image_shape: Tuple[int, int], points: List[Tuple[flo
     height, width = image_shape
     heatmap = np.zeros((height, width), dtype=np.float32)
 
-    radius = int(np.ceil(RADIUS_MULTIPLIER * SIGMA))
+    radius = int(np.ceil(
+        DATASET_JUNCTION_WEIGHT_RADIUS_MULTIPLIER * DATASET_JUNCTION_WEIGHT_SIGMA))
 
     for x, y in points:
         x_int, y_int = int(round(x)), int(round(y))
@@ -95,9 +108,10 @@ def create_gaussian_heatmap(image_shape: Tuple[int, int], points: List[Tuple[flo
         v = np.arange(y_min, y_max)
         uu, vv = np.meshgrid(u, v)
 
-        gaussian = np.exp(-((uu - x)**2 + (vv - y)**2) / (2 * SIGMA**2))
+        gaussian = np.exp(-((uu - x)**2 + (vv - y)**2) /
+                          (2 * DATASET_JUNCTION_WEIGHT_SIGMA**2))
 
-        gaussian[gaussian < CLIP_THRESHOLD] = 0
+        gaussian[gaussian < DATASET_JUNCTION_WEIGHT_CLIP_THRESHOLD] = 0
 
         heatmap[y_min:y_max, x_min:x_max] = np.maximum(
             heatmap[y_min:y_max, x_min:x_max],
@@ -140,9 +154,10 @@ def visualize_heatmap_overlay(
 
 
 def process_images():
-    print(f"Loading CVAT annotations from: {CVAT_XML_PATH}")
+    print(
+        f"Loading CVAT annotations from: {DATASET_JUNCTION_WEIGHT_CVAT_XML_PATH}")
 
-    points_per_image = parse_cvat_xml(CVAT_XML_PATH)
+    points_per_image = parse_cvat_xml(DATASET_JUNCTION_WEIGHT_CVAT_XML_PATH)
     print(f"Found {len(points_per_image)} annotated images in XML")
 
     # Get all images in the image directory
@@ -166,11 +181,11 @@ def process_images():
             # Create zero heatmap if no points annotations found
             heatmap = np.zeros((height, width), dtype=np.float32)
 
-        heatmap_filename = Path(image_name).stem + '_heatmap.npy'
+        heatmap_filename = Path(image_name).stem + '.npy'
         heatmap_path = OUTPUT_DIR / heatmap_filename
         np.save(heatmap_path, heatmap)
 
-        viz_filename = Path(image_name).stem + '_visualization.png'
+        viz_filename = Path(image_name).stem + '_heatmap_visualization.png'
         viz_path = VISUALIZATION_DIR / viz_filename
         visualize_heatmap_overlay(
             image_path=image_path,
