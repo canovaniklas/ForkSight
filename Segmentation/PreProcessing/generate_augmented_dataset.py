@@ -215,7 +215,7 @@ def augment_and_save():
     train_image_paths, test_image_paths = get_train_test_split_image_paths(
         raw_images_dir)
 
-    if SAVE_HEATMAP_VISUALIZATIONS:
+    if DATASET_SAVE_HEATMAP_VISUALIZATIONS:
         viz_dir = dataset_dir / HEATMAP_VISUALIZATION_DIR_NAME
         viz_dir.mkdir(parents=True, exist_ok=True)
 
@@ -260,7 +260,7 @@ def augment_and_save():
             (img_dist, mask_dist, hm_dist, "griddistort"),
         ]
 
-        if SAVE_HEATMAP_VISUALIZATIONS:
+        if DATASET_SAVE_HEATMAP_VISUALIZATIONS:
             viz_idx = random.randint(0, len(augmentations) - 1)
             viz_img, _, viz_hm, viz_aug_name = augmentations[viz_idx]
             aug_label = viz_aug_name if viz_aug_name else "original"
