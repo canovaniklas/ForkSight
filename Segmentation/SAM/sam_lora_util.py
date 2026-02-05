@@ -24,9 +24,10 @@ EVALUATED_TAG = "test-evaluated"
 
 
 class SegmentationDataset(Dataset):
-    def __init__(self, images_dir: Path, masks_dir: Path):
+    def __init__(self, images_dir: Path, masks_dir: Path, heatmaps_dir: Path | None = None):
         self.image_paths = list(images_dir.glob("*.png"))
         self.masks_dir = masks_dir
+        self.heatmaps_dir = heatmaps_dir
 
     def _load_image(self, path: Path, is_mask: bool = False) -> torch.Tensor:
         transform = transforms.Compose([
@@ -44,6 +45,13 @@ class SegmentationDataset(Dataset):
         img = Image.open(path)
         return transform(img)
 
+    def _load_heatmap(self, image_path: Path) -> torch.Tensor:
+        heatmap_path = self.heatmaps_dir / f"{image_path.stem}.npy"
+        heatmap = torch.from_numpy(
+            np.load(heatmap_path).astype(np.float32)).unsqueeze(0)
+        return F.interpolate(heatmap.unsqueeze(0), size=(1024, 1024),
+                             mode='bilinear', align_corners=False).squeeze(0)
+
     def __len__(self):
         return len(self.image_paths)
 
@@ -53,8 +61,10 @@ class SegmentationDataset(Dataset):
 
         image = self._load_image(image_path)
         mask = self._load_image(mask_path, is_mask=True)
+        heatmap = self._load_heatmap(
+            image_path) if self.heatmaps_dir else torch.zeros_like(mask)
 
-        return image, mask
+        return image, mask, heatmap
 
 
 class BCEWithLogitsLoss(nn.Module):
@@ -62,8 +72,10 @@ class BCEWithLogitsLoss(nn.Module):
         super().__init__()
         self.bce = nn.BCEWithLogitsLoss(reduction='none')
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor, heatmap_weights: torch.Tensor | None = None) -> torch.Tensor:
         pixel_bce = self.bce(logits, targets)
+        if heatmap_weights is not None:
+            pixel_bce = pixel_bce * (1.0 + heatmap_weights)
         sample_bce = pixel_bce.view(pixel_bce.shape[0], -1).mean(dim=1)
         return sample_bce.mean()
 
@@ -72,14 +84,19 @@ class SoftDiceLoss(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor, heatmap_weights: torch.Tensor | None = None) -> torch.Tensor:
         masks_prob = torch.sigmoid(logits)
 
         masks_flat = masks_prob.view(masks_prob.shape[0], -1)
         targets_flat = targets.view(targets.shape[0], -1)
 
-        intersection = (masks_flat * targets_flat).sum(dim=1)
-        cardinality = masks_flat.sum(dim=1) + targets_flat.sum(dim=1)
+        w = torch.ones_like(masks_flat)
+        if heatmap_weights is not None:
+            w = 1.0 + heatmap_weights.view(heatmap_weights.shape[0], -1)
+
+        intersection = (w * masks_flat * targets_flat).sum(dim=1)
+        cardinality = (w * masks_flat).sum(dim=1) + \
+            (w * targets_flat).sum(dim=1)
 
         return (1 - (2 * intersection + 1e-6) / (cardinality + 1e-6)).mean()
 
@@ -124,16 +141,20 @@ class SoftClDiceLoss(nn.Module):
         self.smooth = smooth
         self.soft_skeletonize = SoftSkeletonize(num_iter=skeletonize_iter)
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor):
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor, heatmap_weights: torch.Tensor | None = None):
         mask_prob = torch.sigmoid(logits)
 
         skel_pred = self.soft_skeletonize(mask_prob)
         skel_true = self.soft_skeletonize(targets)
 
-        tprec = (torch.sum(torch.multiply(skel_pred, targets)) +
-                 self.smooth) / (torch.sum(skel_pred) + self.smooth)
-        tsens = (torch.sum(torch.multiply(skel_true, mask_prob)) +
-                 self.smooth) / (torch.sum(skel_true) + self.smooth)
+        w = torch.ones_like(targets)
+        if heatmap_weights is not None:
+            w = 1.0 + heatmap_weights
+
+        tprec = (torch.sum(w * skel_pred * targets) +
+                 self.smooth) / (torch.sum(w * skel_pred) + self.smooth)
+        tsens = (torch.sum(w * skel_true * mask_prob) +
+                 self.smooth) / (torch.sum(w * skel_true) + self.smooth)
 
         return 1. - 2.0 * (tprec * tsens) / (tprec + tsens)
 
@@ -154,22 +175,35 @@ class ClDiceDiceBCELoss(nn.Module):
         self.dice_weight = dice_weight
         self.upsample_lowres_logits = upsample_lowres_logits
 
-    def forward(self, low_res_logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    def forward(self, low_res_logits: torch.Tensor, targets: torch.Tensor, heatmap_weights: torch.Tensor | None = None) -> torch.Tensor:
         """
         low_res_logits: predicted low-res mask logits, shape (B, 1, H_lowres, W_lowres)
         targets: binary 0/1, shape (B, 1, H_original, W_original)
+        heatmap_weights: junction Gaussian weights, shape (B, 1, H_original, W_original), or None
         """
         if self.upsample_lowres_logits is not None:
             low_res_logits = F.interpolate(
                 low_res_logits, size=self.upsample_lowres_logits, mode='bilinear', align_corners=False)
 
-        targets = targets.to(device=low_res_logits.device, dtype=torch.float32)
-        targets_resized = F.interpolate(targets, size=(
-            low_res_logits.shape[-2], low_res_logits.shape[-1]), mode='nearest')
+        logit_spatial = (low_res_logits.shape[-2], low_res_logits.shape[-1])
 
-        cl_dice_loss_value = self.cl_dice_loss(low_res_logits, targets_resized)
-        dice_loss_value = self.dice_loss(low_res_logits, targets_resized)
-        bce_loss_value = self.bce_loss(low_res_logits, targets_resized)
+        targets = targets.to(device=low_res_logits.device, dtype=torch.float32)
+        targets_resized = F.interpolate(
+            targets, size=logit_spatial, mode='nearest')
+
+        heatmap_weights_resized = None
+        if heatmap_weights is not None:
+            heatmap_weights_resized = F.interpolate(
+                heatmap_weights.to(
+                    device=low_res_logits.device, dtype=torch.float32),
+                size=logit_spatial, mode='bilinear', align_corners=False)
+
+        cl_dice_loss_value = self.cl_dice_loss(
+            low_res_logits, targets_resized, heatmap_weights_resized)
+        dice_loss_value = self.dice_loss(
+            low_res_logits, targets_resized, heatmap_weights_resized)
+        bce_loss_value = self.bce_loss(
+            low_res_logits, targets_resized, heatmap_weights_resized)
 
         return (self.cl_dice_weight * cl_dice_loss_value) + \
             (self.dice_weight * dice_loss_value) + \
@@ -194,7 +228,7 @@ class SkeletonRecallLoss2D(nn.Module):
 
         return torch.from_numpy(final_skeleton).unsqueeze(0).to(device)
 
-    def forward(self, logits: torch.Tensor, ground_truth_masks: torch.Tensor):
+    def forward(self, logits: torch.Tensor, ground_truth_masks: torch.Tensor, heatmap_weights: torch.Tensor | None = None):
         """
         logits: (B, C, H, W) - segmentation network output logits
         ground_truth_masks: (B, C, H, W) - ground truth segmentation mask (0 or 1)
@@ -206,8 +240,12 @@ class SkeletonRecallLoss2D(nn.Module):
                          for i in range(ground_truth_masks.shape[0])]
         skeletons = torch.stack(skeleton_list)
 
-        intersection = (probs * skeletons).sum(dim=(2, 3))
-        ground_truth_sum = skeletons.sum(dim=(2, 3))
+        w = torch.ones_like(skeletons)
+        if heatmap_weights is not None:
+            w = 1.0 + heatmap_weights
+
+        intersection = (w * probs * skeletons).sum(dim=(2, 3))
+        ground_truth_sum = (w * skeletons).sum(dim=(2, 3))
 
         recall = (intersection + 1e-6) / (ground_truth_sum + 1e-6)
         loss = 1.0 - recall
@@ -231,26 +269,37 @@ class SkeletonRecallDiceBCELoss(nn.Module):
         self.dice_weight = dice_weight
         self.upsample_lowres_logits = upsample_lowres_logits
 
-    def forward(self, low_res_logits: torch.Tensor, ground_truth_masks: torch.Tensor) -> torch.Tensor:
+    def forward(self, low_res_logits: torch.Tensor, ground_truth_masks: torch.Tensor, heatmap_weights: torch.Tensor | None = None) -> torch.Tensor:
         """
         low_res_logits: predicted low-res mask logits, shape (B, 1, H_lowres, W_lowres)
         ground_truth_masks: binary 0/1, shape (B, 1, H_original, W_original)
+        heatmap_weights: junction Gaussian weights, shape (B, 1, H_original, W_original), or None
         """
         if self.upsample_lowres_logits is not None:
             low_res_logits = F.interpolate(
                 low_res_logits, size=self.upsample_lowres_logits, mode='bilinear', align_corners=False)
 
+        logit_spatial = (low_res_logits.shape[-2], low_res_logits.shape[-1])
+
         ground_truth_masks = ground_truth_masks.to(
             device=low_res_logits.device, dtype=torch.float32)
-        ground_truth_masks_resized = F.interpolate(ground_truth_masks, size=(
-            low_res_logits.shape[-2], low_res_logits.shape[-1]), mode='nearest')
+        ground_truth_masks_resized = F.interpolate(
+            ground_truth_masks, size=logit_spatial, mode='nearest')
+
+        # bilinear for heatmap: continuous field, not discrete labels
+        heatmap_weights_resized = None
+        if heatmap_weights is not None:
+            heatmap_weights_resized = F.interpolate(
+                heatmap_weights.to(
+                    device=low_res_logits.device, dtype=torch.float32),
+                size=logit_spatial, mode='bilinear', align_corners=False)
 
         skeleton_recall_loss_value = self.skeleton_recall_loss(
-            low_res_logits, ground_truth_masks_resized)
+            low_res_logits, ground_truth_masks_resized, heatmap_weights_resized)
         dice_loss_value = self.dice_loss(
-            low_res_logits, ground_truth_masks_resized)
+            low_res_logits, ground_truth_masks_resized, heatmap_weights_resized)
         bce_loss_value = self.bce_loss(
-            low_res_logits, ground_truth_masks_resized)
+            low_res_logits, ground_truth_masks_resized, heatmap_weights_resized)
 
         return (self.skeleton_recall_weight * skeleton_recall_loss_value) + \
             (self.dice_weight * dice_loss_value) + \
@@ -306,7 +355,7 @@ def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, de
     iou_scores = []
     losses = []
 
-    for image, mask in dataloader:
+    for image, mask, _ in dataloader:
         image = image.to(device)
         mask = mask.to(device)
 

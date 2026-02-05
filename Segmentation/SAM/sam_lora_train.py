@@ -26,22 +26,18 @@ DATASETS_DIR = os.getenv("DATASETS_DIR")
 
 DATASET_NAME = os.getenv("DATASET_NAME", "SAM_LoRA_Augmented")
 
-LOWRES_IMG_PATCHES_DIR_NAME = os.getenv(
-    "LOWRES_IMG_PATCHES_DIR_NAME", "img_patches_256")
-LOWRES_MASK_PATCHES_DIR_NAME = os.getenv(
-    "LOWRES_MASK_PATCHES_DIR_NAME", "mask_patches_256")
 HIGHRES_IMG_PATCHES_DIR_NAME = os.getenv(
     "HIGHRES_IMG_PATCHES_DIR_NAME", "img_patches_1024")
 HIGHRES_MASK_PATCHES_DIR_NAME = os.getenv(
     "HIGHRES_MASK_PATCHES_DIR_NAME", "mask_patches_1024")
+HIGHRES_HEATMAP_PATCHES_DIR_NAME = os.getenv(
+    "HIGHRES_HEATMAP_PATCHES_DIR_NAME", "heatmap_patches_1024")
 
 USE_WANDB = load_as_bool("USE_WANDB", True)
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
 WANDB_PROJECT = os.getenv("WANDB_PROJECT", "ForkSight-SAM")
 WANDB_API_KEY = os.getenv("WANDB_API_KEY")
 
-SAM_LORA_INPUT_IMG_TYPE = os.getenv(
-    "SAM_LORA_INPUT_IMG_TYPE", "patches_highres")
 SAM_LORA_FINETUNE_IMAGE_ENCODER = load_as_bool(
     "SAM_LORA_FINETUNE_IMAGE_ENCODER", False)
 SAM_LORA_FINETUNE_MASK_DECODER = load_as_bool(
@@ -68,6 +64,10 @@ SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS = load_as(
     "SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS", int, 15)
 SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT = load_as(
     "SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT", float, 0.0)
+SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING = load_as_bool(
+    "SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING", False)
+SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE = load_as(
+    "SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE", float, 1.0)
 
 EARLY_STOPPING_PATIENCE = load_as("EARLY_STOPPING_PATIENCE", int, 15)
 EARLY_STOPPING_DELTA = load_as("EARLY_STOPPING_DELTA", float, 0.005)
@@ -88,16 +88,12 @@ if not Path(MODEL_OUT_DIR).is_dir():
 
 train_dir = Path(DATASETS_DIR) / DATASET_NAME / "train"
 test_dir = Path(DATASETS_DIR) / DATASET_NAME / "test"
-if SAM_LORA_INPUT_IMG_TYPE == "patches_lowres":
-    TRAIN_IMAGES_DIR = train_dir / LOWRES_IMG_PATCHES_DIR_NAME
-    TRAIN_MASKS_DIR = train_dir / LOWRES_MASK_PATCHES_DIR_NAME
-    TEST_IMAGES_DIR = test_dir / LOWRES_IMG_PATCHES_DIR_NAME
-    TEST_MASKS_DIR = test_dir / LOWRES_MASK_PATCHES_DIR_NAME
-elif SAM_LORA_INPUT_IMG_TYPE == "patches_highres":
-    TRAIN_IMAGES_DIR = train_dir / HIGHRES_IMG_PATCHES_DIR_NAME
-    TRAIN_MASKS_DIR = train_dir / HIGHRES_MASK_PATCHES_DIR_NAME
-    TEST_IMAGES_DIR = test_dir / HIGHRES_IMG_PATCHES_DIR_NAME
-    TEST_MASKS_DIR = test_dir / HIGHRES_MASK_PATCHES_DIR_NAME
+TRAIN_IMAGES_DIR = train_dir / HIGHRES_IMG_PATCHES_DIR_NAME
+TRAIN_MASKS_DIR = train_dir / HIGHRES_MASK_PATCHES_DIR_NAME
+TEST_IMAGES_DIR = test_dir / HIGHRES_IMG_PATCHES_DIR_NAME
+TEST_MASKS_DIR = test_dir / HIGHRES_MASK_PATCHES_DIR_NAME
+TRAIN_HEATMAPS_DIR = train_dir / \
+    HIGHRES_HEATMAP_PATCHES_DIR_NAME if SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING else None
 
 
 RUN_DATETIME_STR = datetime.now(
@@ -177,7 +173,6 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "LoRA_rank": SAM_LORA_RANK,
             "finetuned_modules": str(finetuned_modules),
             "dataset": f"{DATASET_NAME}",
-            "input_img_type": SAM_LORA_INPUT_IMG_TYPE,
             "train_set_size": trainset_len,
             "val_set_size": valset_len,
             "num_base_training_images": len(base_training_images),
@@ -192,6 +187,8 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "cl_dice_skeletonize_iterations": SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS,
             "skeleton_recall_loss_weight": SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT,
             "loss_function": SkeletonRecallDiceBCELoss.__name__ if SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT > 0.0 else ClDiceDiceBCELoss.__name__,
+            "junction_heatmap_weighting": SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING,
+            "junction_heatmap_weight_scale": SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE,
         },
     )
 
@@ -242,7 +239,7 @@ def save_params(sam_lora: SamLoRA, wandb_run, suffix: str = None):
 
 def init_data_loaders():
     dataset = SegmentationDataset(
-        images_dir=TRAIN_IMAGES_DIR, masks_dir=TRAIN_MASKS_DIR)
+        images_dir=TRAIN_IMAGES_DIR, masks_dir=TRAIN_MASKS_DIR, heatmaps_dir=TRAIN_HEATMAPS_DIR)
 
     indices = list(range(len(dataset)))
     np.random.shuffle(indices)
@@ -312,9 +309,10 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         sam_lora.train()
         total_training_loss = 0.0
 
-        for batched_input, target_masks in trainloader:
+        for batched_input, target_masks, heatmap_weights in trainloader:
             batched_input = batched_input.to(device)
             target_masks = target_masks.to(device)
+            heatmap_weights = heatmap_weights.to(device)
             batched_input = get_batched_input_list(batched_input)
 
             optimizer.zero_grad()
@@ -323,7 +321,10 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
             output_logits = torch.cat([d["low_res_logits"]
                                       for d in outputs], dim=0)
 
-            loss = loss_fn(output_logits, target_masks)
+            heatmap_weights = heatmap_weights * \
+                SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE if SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING else None
+
+            loss = loss_fn(output_logits, target_masks, heatmap_weights)
             total_training_loss += loss.item() * len(batched_input)
 
             loss.backward()
@@ -340,9 +341,10 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         total_validation_loss = 0.0
 
         with torch.no_grad():
-            for batched_input, target_masks in validationloader:
+            for batched_input, target_masks, heatmap_weights in validationloader:
                 batched_input = batched_input.to(device)
                 target_masks = target_masks.to(device)
+                heatmap_weights = heatmap_weights.to(device)
                 batched_input = get_batched_input_list(batched_input)
 
                 outputs = sam_lora(batched_input=batched_input,
@@ -350,7 +352,8 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                 output_logits = torch.cat([d["low_res_logits"]
                                           for d in outputs], dim=0)
 
-                loss = loss_fn(output_logits, target_masks)
+                loss = loss_fn(output_logits, target_masks, heatmap_weights *
+                               SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE if SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING else None)
                 total_validation_loss += loss.item() * len(batched_input)
 
         # epoch metrics
