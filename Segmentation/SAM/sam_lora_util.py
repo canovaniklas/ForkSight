@@ -175,12 +175,137 @@ class SoftClDiceLoss(nn.Module):
         return 1. - 2.0 * (tprec * tsens) / (tprec + tsens)
 
 
+class JunctionPatchLoss(nn.Module):
+    def __init__(self, patch_size: int = 64, loss_type: str = "cldice", skeletonize_iter: int = 15):
+        """
+        Loss computed on patches around junction centers.
+
+        Args:
+            patch_size: Size of square patch around each junction (default 64)
+            loss_type: Type of loss to compute on patches: "cldice", "dice", or "focal" (default "cldice")
+            skeletonize_iter: Number of iterations for soft skeletonization if using cldice
+        """
+        super(JunctionPatchLoss, self).__init__()
+        self.patch_size = patch_size
+        self.loss_type = loss_type
+
+        if loss_type == "cldice":
+            self.loss_fn = SoftClDiceLoss(skeletonize_iter)
+        elif loss_type == "dice":
+            self.loss_fn = SoftDiceLoss()
+        elif loss_type == "focal":
+            # Focal loss with alpha=0.25, gamma=2.0
+            self.focal_alpha = 0.25
+            self.focal_gamma = 2.0
+        else:
+            raise ValueError(f"Unsupported loss_type: {loss_type}")
+
+    def _extract_patch(self, tensor: torch.Tensor, center_y: int, center_x: int, h: int, w: int) -> torch.Tensor:
+        """Extract a patch around a center point, handling boundary cases."""
+        half_patch = self.patch_size // 2
+
+        y_start = max(0, center_y - half_patch)
+        y_end = min(h, center_y + half_patch)
+        x_start = max(0, center_x - half_patch)
+        x_end = min(w, center_x + half_patch)
+
+        return tensor[:, :, y_start:y_end, x_start:x_end]
+
+    def _compute_focal_loss(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Compute focal loss for a patch."""
+        probs = torch.sigmoid(logits)
+        ce_loss = F.binary_cross_entropy_with_logits(logits, targets, reduction='none')
+        p_t = probs * targets + (1 - probs) * (1 - targets)
+        focal_weight = (1 - p_t) ** self.focal_gamma
+
+        if self.focal_alpha >= 0:
+            alpha_t = self.focal_alpha * targets + (1 - self.focal_alpha) * (1 - targets)
+            focal_loss = alpha_t * focal_weight * ce_loss
+        else:
+            focal_loss = focal_weight * ce_loss
+
+        return focal_loss.mean()
+
+    def _find_junction_centers(self, heatmap: torch.Tensor) -> torch.Tensor:
+        """
+        Find junction centers by identifying pixels with maximum heatmap value.
+        If heatmap is all zeros (no junctions), returns empty tensor.
+
+        Args:
+            heatmap: (H, W) - 2D heatmap
+
+        Returns:
+            Tensor of (N, 2) coordinates (y, x) of junction centers
+        """
+        max_val = heatmap.max()
+
+        # If heatmap is all zeros, no junctions present
+        if max_val == 0:
+            return torch.empty((0, 2), dtype=torch.long, device=heatmap.device)
+
+        # Find all pixels at maximum value (the Gaussian peaks)
+        is_peak = heatmap == max_val
+        junction_coords = torch.nonzero(is_peak, as_tuple=False)  # (N, 2) of (y, x)
+        return junction_coords
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor, heatmap_weights: torch.Tensor | None = None) -> torch.Tensor:
+        """
+        Args:
+            logits: (B, 1, H, W) - predicted logits
+            targets: (B, 1, H, W) - ground truth masks
+            heatmap_weights: (B, 1, H, W) - junction heatmaps, or None
+
+        Returns:
+            Mean loss across all detected junction patches, or 0 if no junctions found
+        """
+        if heatmap_weights is None:
+            return torch.tensor(0.0, device=logits.device)
+
+        batch_size, _, h, w = logits.shape
+        all_patch_losses = []
+
+        for b in range(batch_size):
+            heatmap = heatmap_weights[b, 0]  # (H, W)
+
+            # Find junction centers (pixels at maximum heatmap value)
+            junction_coords = self._find_junction_centers(heatmap)
+
+            if junction_coords.shape[0] == 0:
+                continue  # No junctions in this sample
+
+            # Extract patches around each junction center and compute loss
+            for coord in junction_coords:
+                center_y, center_x = coord[0].item(), coord[1].item()
+
+                logits_patch = self._extract_patch(logits[b:b+1], center_y, center_x, h, w)
+                targets_patch = self._extract_patch(targets[b:b+1], center_y, center_x, h, w)
+
+                # Skip if patch is too small (near boundaries)
+                if logits_patch.shape[2] < 8 or logits_patch.shape[3] < 8:
+                    continue
+
+                if self.loss_type == "focal":
+                    patch_loss = self._compute_focal_loss(logits_patch, targets_patch)
+                else:
+                    patch_loss = self.loss_fn(logits_patch, targets_patch)
+
+                all_patch_losses.append(patch_loss)
+
+        if len(all_patch_losses) == 0:
+            return torch.tensor(0.0, device=logits.device)
+
+        return torch.stack(all_patch_losses).mean()
+
+
 class ClDiceDiceBCELoss(nn.Module):
     def __init__(self, skeletonize_iter: int, cl_dice_weight: float, dice_weight: float,
                  upsample_lowres_logits: tuple[int, int] | None = None,
-                 heatmap_weight_scale: float = 1.0, junction_boost: float = 0.5):
+                 heatmap_weight_scale: float = 1.0, junction_boost: float = 0.5,
+                 use_junction_patch_loss: bool = False, junction_patch_weight: float = 0.0,
+                 junction_patch_size: int = 64,
+                 junction_loss_type: str = "cldice"):
         """
-        Combined centerline Dice + Dice + BCE loss with junction boost.
+        Combined centerline Dice + Dice + BCE loss with optional junction patch loss.
 
         Args:
             skeletonize_iter: Number of iterations for soft skeletonization
@@ -189,6 +314,10 @@ class ClDiceDiceBCELoss(nn.Module):
             upsample_lowres_logits: Optional (H, W) to upsample logits before loss computation
             heatmap_weight_scale: Pixel-level junction weighting (default 1.0)
             junction_boost: Sample-level junction boost (default 0.5)
+            use_junction_patch_loss: Whether to add junction patch loss (default False)
+            junction_patch_weight: Weight for junction patch loss term (default 0.0)
+            junction_patch_size: Size of patches around junctions (default 64)
+            junction_loss_type: Loss type for patches: "cldice", "dice", or "focal" (default "cldice")
         """
         super(ClDiceDiceBCELoss, self).__init__()
 
@@ -198,6 +327,15 @@ class ClDiceDiceBCELoss(nn.Module):
             heatmap_weight_scale=heatmap_weight_scale,
             junction_boost=junction_boost
         )
+
+        self.use_junction_patch_loss = use_junction_patch_loss
+        self.junction_patch_weight = junction_patch_weight
+        if use_junction_patch_loss:
+            self.junction_patch_loss = JunctionPatchLoss(
+                patch_size=junction_patch_size,
+                loss_type=junction_loss_type,
+                skeletonize_iter=skeletonize_iter
+            )
 
         assert cl_dice_weight + dice_weight <= 1.0, \
             "Sum of cl_dice_weight and dice_weight must be less than or equal to 1.0"
@@ -242,9 +380,17 @@ class ClDiceDiceBCELoss(nn.Module):
             low_res_logits, targets_resized, heatmap_weights_resized)
 
         base_bce_weight = 1 - self.cl_dice_weight - self.dice_weight
-        return (self.cl_dice_weight * cl_dice_loss_value) + \
+        total_loss = (self.cl_dice_weight * cl_dice_loss_value) + \
             (self.dice_weight * dice_loss_value) + \
             (base_bce_weight * bce_loss_value)
+
+        # Add junction patch loss if enabled
+        if self.use_junction_patch_loss and heatmap_weights_resized is not None:
+            junction_patch_loss_value = self.junction_patch_loss(
+                low_res_logits, targets_resized, heatmap_weights_resized)
+            total_loss = total_loss + self.junction_patch_weight * junction_patch_loss_value
+
+        return total_loss
 
 
 class SkeletonRecallLoss2D(nn.Module):
@@ -289,9 +435,12 @@ class SkeletonRecallLoss2D(nn.Module):
 class SkeletonRecallDiceBCELoss(nn.Module):
     def __init__(self, skeleton_recall_weight: float, dice_weight: float,
                  upsample_lowres_logits: tuple[int, int] | None = None,
-                 heatmap_weight_scale: float = 1.0, junction_boost: float = 0.5):
+                 heatmap_weight_scale: float = 1.0, junction_boost: float = 0.5,
+                 use_junction_patch_loss: bool = False, junction_patch_weight: float = 0.0,
+                 junction_patch_size: int = 64,
+                 junction_loss_type: str = "cldice", skeletonize_iter: int = 15):
         """
-        Combined skeleton recall + Dice + BCE loss with junction boost.
+        Combined skeleton recall + Dice + BCE loss with optional junction patch loss.
 
         Args:
             skeleton_recall_weight: Weight for skeleton recall loss
@@ -299,6 +448,11 @@ class SkeletonRecallDiceBCELoss(nn.Module):
             upsample_lowres_logits: Optional (H, W) to upsample logits before loss computation
             heatmap_weight_scale: Pixel-level junction weighting (default 1.0)
             junction_boost: Sample-level junction boost (default 0.5)
+            use_junction_patch_loss: Whether to add junction patch loss (default False)
+            junction_patch_weight: Weight for junction patch loss term (default 0.0)
+            junction_patch_size: Size of patches around junctions (default 64)
+            junction_loss_type: Loss type for patches: "cldice", "dice", or "focal" (default "cldice")
+            skeletonize_iter: Number of iterations for soft skeletonization if using cldice
         """
         super(SkeletonRecallDiceBCELoss, self).__init__()
 
@@ -308,6 +462,15 @@ class SkeletonRecallDiceBCELoss(nn.Module):
             heatmap_weight_scale=heatmap_weight_scale,
             junction_boost=junction_boost
         )
+
+        self.use_junction_patch_loss = use_junction_patch_loss
+        self.junction_patch_weight = junction_patch_weight
+        if use_junction_patch_loss:
+            self.junction_patch_loss = JunctionPatchLoss(
+                patch_size=junction_patch_size,
+                loss_type=junction_loss_type,
+                skeletonize_iter=skeletonize_iter
+            )
 
         assert skeleton_recall_weight + dice_weight <= 1.0, \
             "Sum of skeleton_recall_weight and dice_weight must be less than or equal to 1.0"
@@ -357,9 +520,17 @@ class SkeletonRecallDiceBCELoss(nn.Module):
             low_res_logits, ground_truth_masks_resized, heatmap_weights_resized)
 
         base_bce_weight = 1 - self.skeleton_recall_weight - self.dice_weight
-        return (self.skeleton_recall_weight * skeleton_recall_loss_value) + \
+        total_loss = (self.skeleton_recall_weight * skeleton_recall_loss_value) + \
             (self.dice_weight * dice_loss_value) + \
             (base_bce_weight * bce_loss_value)
+
+        # Add junction patch loss if enabled
+        if self.use_junction_patch_loss and heatmap_weights_resized is not None:
+            junction_patch_loss_value = self.junction_patch_loss(
+                low_res_logits, ground_truth_masks_resized, heatmap_weights_resized)
+            total_loss = total_loss + self.junction_patch_weight * junction_patch_loss_value
+
+        return total_loss
 
 
 def hard_dice_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:

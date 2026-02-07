@@ -70,6 +70,14 @@ SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE = load_as(
     "SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE", float, 1.0)
 SAM_LORA_JUNCTION_BOOST = load_as(
     "SAM_LORA_JUNCTION_BOOST", float, 0.5)
+SAM_LORA_USE_JUNCTION_PATCH_LOSS = load_as_bool(
+    "SAM_LORA_USE_JUNCTION_PATCH_LOSS", False)
+SAM_LORA_JUNCTION_PATCH_WEIGHT = load_as(
+    "SAM_LORA_JUNCTION_PATCH_WEIGHT", float, 0.0)
+SAM_LORA_JUNCTION_PATCH_SIZE = load_as(
+    "SAM_LORA_JUNCTION_PATCH_SIZE", int, 64)
+SAM_LORA_JUNCTION_LOSS_TYPE = os.getenv(
+    "SAM_LORA_JUNCTION_LOSS_TYPE", "cldice")
 
 EARLY_STOPPING_PATIENCE = load_as("EARLY_STOPPING_PATIENCE", int, 15)
 EARLY_STOPPING_DELTA = load_as("EARLY_STOPPING_DELTA", float, 0.005)
@@ -192,6 +200,10 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "junction_heatmap_weighting": SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING,
             "junction_heatmap_weight_scale": SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE,
             "junction_boost": SAM_LORA_JUNCTION_BOOST,
+            "use_junction_patch_loss": SAM_LORA_USE_JUNCTION_PATCH_LOSS,
+            "junction_patch_weight": SAM_LORA_JUNCTION_PATCH_WEIGHT,
+            "junction_patch_size": SAM_LORA_JUNCTION_PATCH_SIZE,
+            "junction_loss_type": SAM_LORA_JUNCTION_LOSS_TYPE,
         },
     )
 
@@ -276,14 +288,23 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                                             dice_weight=SAM_LORA_DICE_LOSS_WEIGHT,
                                             upsample_lowres_logits=SAM_LORA_UPSAMPLE_LOWRES_LOGITS,
                                             heatmap_weight_scale=SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE,
-                                            junction_boost=SAM_LORA_JUNCTION_BOOST)
+                                            junction_boost=SAM_LORA_JUNCTION_BOOST,
+                                            use_junction_patch_loss=SAM_LORA_USE_JUNCTION_PATCH_LOSS,
+                                            junction_patch_weight=SAM_LORA_JUNCTION_PATCH_WEIGHT,
+                                            junction_patch_size=SAM_LORA_JUNCTION_PATCH_SIZE,
+                                            junction_loss_type=SAM_LORA_JUNCTION_LOSS_TYPE,
+                                            skeletonize_iter=SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS)
     else:
         loss_fn = ClDiceDiceBCELoss(skeletonize_iter=SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS,
                                     cl_dice_weight=SAM_LORA_CL_DICE_LOSS_WEIGHT,
                                     dice_weight=SAM_LORA_DICE_LOSS_WEIGHT,
                                     upsample_lowres_logits=SAM_LORA_UPSAMPLE_LOWRES_LOGITS,
                                     heatmap_weight_scale=SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE,
-                                    junction_boost=SAM_LORA_JUNCTION_BOOST)
+                                    junction_boost=SAM_LORA_JUNCTION_BOOST,
+                                    use_junction_patch_loss=SAM_LORA_USE_JUNCTION_PATCH_LOSS,
+                                    junction_patch_weight=SAM_LORA_JUNCTION_PATCH_WEIGHT,
+                                    junction_patch_size=SAM_LORA_JUNCTION_PATCH_SIZE,
+                                    junction_loss_type=SAM_LORA_JUNCTION_LOSS_TYPE)
 
     trainable_params = get_trainable_params(sam_lora)
     for name, p in trainable_params:
