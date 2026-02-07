@@ -68,46 +68,40 @@ class SegmentationDataset(Dataset):
 
 
 class BCEWithLogitsLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, heatmap_weight_scale: float = 1.0, junction_boost: float = 0.5):
         super().__init__()
         self.bce = nn.BCEWithLogitsLoss(reduction='none')
+        self.heatmap_weight_scale = heatmap_weight_scale
+        self.junction_boost = junction_boost
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor, heatmap_weights: torch.Tensor | None = None, hard_negative_mining: bool = False) -> torch.Tensor:
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor,
+                heatmap_weights: torch.Tensor | None = None) -> torch.Tensor:
+        """
+        Args:
+            logits: (B, 1, H, W) - predicted logits
+            targets: (B, 1, H, W) - ground truth masks
+            heatmap_weights: (B, 1, H, W) - junction importance weights [0, 1], or None
+
+        Returns:
+            Scalar loss value
+        """
         pixel_bce = self.bce(logits, targets)
         pixel_bce_flat = pixel_bce.view(pixel_bce.shape[0], -1)
 
         if heatmap_weights is not None:
             heatmap_flat = heatmap_weights.view(heatmap_weights.shape[0], -1)
-            w = (1.0 + heatmap_flat)
 
-            # Hard negative mining: boost weights for hardest pixels in junction regions
-            if hard_negative_mining:
-                # Identify junction regions (heatmap > 0.1)
-                junction_mask = heatmap_flat > 0.1
+            # Pixel-level weighting: junction pixels get higher weight
+            w = (1.0 + self.heatmap_weight_scale * heatmap_flat)
+            sample_bce = (pixel_bce_flat * w).mean(dim=1)
 
-                # For each sample in batch
-                for batch_idx in range(pixel_bce_flat.shape[0]):
-                    junction_pixels = junction_mask[batch_idx]
-                    if junction_pixels.any():
-                        # Get losses in junction region
-                        junction_losses = pixel_bce_flat[batch_idx][junction_pixels]
-
-                        # Find top 30% hardest pixels
-                        k = max(1, int(0.3 * junction_pixels.sum().item()))
-                        hard_threshold = torch.topk(junction_losses, k).values[-1]
-
-                        # Create mask for hard pixels
-                        hard_pixel_mask = torch.zeros_like(pixel_bce_flat[batch_idx], dtype=torch.bool)
-                        junction_indices = torch.where(junction_pixels)[0]
-                        hard_in_junction = junction_losses >= hard_threshold
-                        hard_pixel_mask[junction_indices[hard_in_junction]] = True
-
-                        # Boost weight for hard pixels by 3x
-                        w[batch_idx][hard_pixel_mask] *= 3.0
-
-            sample_bce = (pixel_bce_flat * w).sum(dim=1) / w.sum(dim=1)
+            # Sample-level boost: images with more junctions get higher loss
+            #junction_density = heatmap_flat.mean(dim=1)
+            #junction_boost_factor = 1.0 + self.junction_boost * junction_density
+            #sample_bce = weighted_bce * junction_boost_factor
         else:
             sample_bce = pixel_bce_flat.mean(dim=1)
+
         return sample_bce.mean()
 
 
@@ -182,31 +176,52 @@ class SoftClDiceLoss(nn.Module):
 
 
 class ClDiceDiceBCELoss(nn.Module):
-    def __init__(self, skeletonize_iter: int, cl_dice_weight: float, dice_weight: float, upsample_lowres_logits: tuple[int, int] | None = None):
+    def __init__(self, skeletonize_iter: int, cl_dice_weight: float, dice_weight: float,
+                 upsample_lowres_logits: tuple[int, int] | None = None,
+                 heatmap_weight_scale: float = 1.0, junction_boost: float = 0.5):
+        """
+        Combined centerline Dice + Dice + BCE loss with junction boost.
+
+        Args:
+            skeletonize_iter: Number of iterations for soft skeletonization
+            cl_dice_weight: Weight for centerline Dice loss
+            dice_weight: Weight for standard Dice loss
+            upsample_lowres_logits: Optional (H, W) to upsample logits before loss computation
+            heatmap_weight_scale: Pixel-level junction weighting (default 1.0)
+            junction_boost: Sample-level junction boost (default 0.5)
+        """
         super(ClDiceDiceBCELoss, self).__init__()
 
         self.cl_dice_loss = SoftClDiceLoss(skeletonize_iter)
         self.dice_loss = SoftDiceLoss()
-        self.bce_loss = BCEWithLogitsLoss()
+        self.bce_loss = BCEWithLogitsLoss(
+            heatmap_weight_scale=heatmap_weight_scale,
+            junction_boost=junction_boost
+        )
 
-        assert cl_dice_weight + \
-            dice_weight <= 1.0, "Sum of cl_dice_weight and dice_weight must be less than or equal to 1.0"
+        assert cl_dice_weight + dice_weight <= 1.0, \
+            "Sum of cl_dice_weight and dice_weight must be less than or equal to 1.0"
         assert cl_dice_weight >= 0.0 and dice_weight >= 0.0, "Weights must be non-negative"
 
         self.cl_dice_weight = cl_dice_weight
         self.dice_weight = dice_weight
         self.upsample_lowres_logits = upsample_lowres_logits
 
-    def forward(self, low_res_logits: torch.Tensor, targets: torch.Tensor, heatmap_weights: torch.Tensor | None = None, hard_negative_mining: bool = False) -> torch.Tensor:
+    def forward(self, low_res_logits: torch.Tensor, targets: torch.Tensor,
+                heatmap_weights: torch.Tensor | None = None) -> torch.Tensor:
         """
-        low_res_logits: predicted low-res mask logits, shape (B, 1, H_lowres, W_lowres)
-        targets: binary 0/1, shape (B, 1, H_original, W_original)
-        heatmap_weights: junction Gaussian weights, shape (B, 1, H_original, W_original), or None
-        hard_negative_mining: whether to apply hard negative mining on junction pixels
+        Args:
+            low_res_logits: predicted low-res mask logits, shape (B, 1, H_lowres, W_lowres)
+            targets: binary 0/1, shape (B, 1, H_original, W_original)
+            heatmap_weights: junction Gaussian weights, shape (B, 1, H_original, W_original), or None
+
+        Returns:
+            Combined loss value
         """
         if self.upsample_lowres_logits is not None:
             low_res_logits = F.interpolate(
-                low_res_logits, size=self.upsample_lowres_logits, mode='bilinear', align_corners=False)
+                low_res_logits, size=self.upsample_lowres_logits,
+                mode='bilinear', align_corners=False)
 
         logit_spatial = (low_res_logits.shape[-2], low_res_logits.shape[-1])
 
@@ -224,23 +239,12 @@ class ClDiceDiceBCELoss(nn.Module):
         cl_dice_loss_value = self.cl_dice_loss(low_res_logits, targets_resized)
         dice_loss_value = self.dice_loss(low_res_logits, targets_resized)
         bce_loss_value = self.bce_loss(
-            low_res_logits, targets_resized, heatmap_weights_resized, hard_negative_mining)
+            low_res_logits, targets_resized, heatmap_weights_resized)
 
-        # Adaptive weighting: boost BCE coefficient when junctions are present
         base_bce_weight = 1 - self.cl_dice_weight - self.dice_weight
-        if heatmap_weights_resized is not None:
-            junction_density = heatmap_weights_resized.mean().item()
-            # Boost BCE weight proportionally to junction density (up to 3x with typical junctions)
-            bce_weight = base_bce_weight * (1.0 + 2.0 * junction_density)
-            # Renormalize so total weight sums to 1
-            total_weight = self.cl_dice_weight + self.dice_weight + bce_weight
-            return (self.cl_dice_weight / total_weight * cl_dice_loss_value) + \
-                (self.dice_weight / total_weight * dice_loss_value) + \
-                (bce_weight / total_weight * bce_loss_value)
-        else:
-            return (self.cl_dice_weight * cl_dice_loss_value) + \
-                (self.dice_weight * dice_loss_value) + \
-                (base_bce_weight * bce_loss_value)
+        return (self.cl_dice_weight * cl_dice_loss_value) + \
+            (self.dice_weight * dice_loss_value) + \
+            (base_bce_weight * bce_loss_value)
 
 
 class SkeletonRecallLoss2D(nn.Module):
@@ -283,31 +287,52 @@ class SkeletonRecallLoss2D(nn.Module):
 
 
 class SkeletonRecallDiceBCELoss(nn.Module):
-    def __init__(self, skeleton_recall_weight: float, dice_weight: float, upsample_lowres_logits: tuple[int, int] | None = None):
+    def __init__(self, skeleton_recall_weight: float, dice_weight: float,
+                 upsample_lowres_logits: tuple[int, int] | None = None,
+                 heatmap_weight_scale: float = 1.0, junction_boost: float = 0.5):
+        """
+        Combined skeleton recall + Dice + BCE loss with junction boost.
+
+        Args:
+            skeleton_recall_weight: Weight for skeleton recall loss
+            dice_weight: Weight for standard Dice loss
+            upsample_lowres_logits: Optional (H, W) to upsample logits before loss computation
+            heatmap_weight_scale: Pixel-level junction weighting (default 1.0)
+            junction_boost: Sample-level junction boost (default 0.5)
+        """
         super(SkeletonRecallDiceBCELoss, self).__init__()
 
         self.skeleton_recall_loss = SkeletonRecallLoss2D()
         self.dice_loss = SoftDiceLoss()
-        self.bce_loss = BCEWithLogitsLoss()
+        self.bce_loss = BCEWithLogitsLoss(
+            heatmap_weight_scale=heatmap_weight_scale,
+            junction_boost=junction_boost
+        )
 
-        assert skeleton_recall_weight + \
-            dice_weight <= 1.0, "Sum of skeleton_recall_weight and dice_weight must be less than or equal to 1.0"
-        assert skeleton_recall_weight >= 0.0 and dice_weight >= 0.0, "Weights must be non-negative"
+        assert skeleton_recall_weight + dice_weight <= 1.0, \
+            "Sum of skeleton_recall_weight and dice_weight must be less than or equal to 1.0"
+        assert skeleton_recall_weight >= 0.0 and dice_weight >= 0.0, \
+            "Weights must be non-negative"
 
         self.skeleton_recall_weight = skeleton_recall_weight
         self.dice_weight = dice_weight
         self.upsample_lowres_logits = upsample_lowres_logits
 
-    def forward(self, low_res_logits: torch.Tensor, ground_truth_masks: torch.Tensor, heatmap_weights: torch.Tensor | None = None, hard_negative_mining: bool = False) -> torch.Tensor:
+    def forward(self, low_res_logits: torch.Tensor, ground_truth_masks: torch.Tensor,
+                heatmap_weights: torch.Tensor | None = None) -> torch.Tensor:
         """
-        low_res_logits: predicted low-res mask logits, shape (B, 1, H_lowres, W_lowres)
-        ground_truth_masks: binary 0/1, shape (B, 1, H_original, W_original)
-        heatmap_weights: junction Gaussian weights, shape (B, 1, H_original, W_original), or None
-        hard_negative_mining: whether to apply hard negative mining on junction pixels
+        Args:
+            low_res_logits: predicted low-res mask logits, shape (B, 1, H_lowres, W_lowres)
+            ground_truth_masks: binary 0/1, shape (B, 1, H_original, W_original)
+            heatmap_weights: junction Gaussian weights, shape (B, 1, H_original, W_original), or None
+
+        Returns:
+            Combined loss value
         """
         if self.upsample_lowres_logits is not None:
             low_res_logits = F.interpolate(
-                low_res_logits, size=self.upsample_lowres_logits, mode='bilinear', align_corners=False)
+                low_res_logits, size=self.upsample_lowres_logits,
+                mode='bilinear', align_corners=False)
 
         logit_spatial = (low_res_logits.shape[-2], low_res_logits.shape[-1])
 
@@ -329,23 +354,12 @@ class SkeletonRecallDiceBCELoss(nn.Module):
         dice_loss_value = self.dice_loss(
             low_res_logits, ground_truth_masks_resized)
         bce_loss_value = self.bce_loss(
-            low_res_logits, ground_truth_masks_resized, heatmap_weights_resized, hard_negative_mining)
+            low_res_logits, ground_truth_masks_resized, heatmap_weights_resized)
 
-        # Adaptive weighting: boost BCE coefficient when junctions are present
         base_bce_weight = 1 - self.skeleton_recall_weight - self.dice_weight
-        if heatmap_weights_resized is not None:
-            junction_density = heatmap_weights_resized.mean().item()
-            # Boost BCE weight proportionally to junction density
-            bce_weight = base_bce_weight * (1.0 + 2.0 * junction_density)
-            # Renormalize so total weight sums to 1
-            total_weight = self.skeleton_recall_weight + self.dice_weight + bce_weight
-            return (self.skeleton_recall_weight / total_weight * skeleton_recall_loss_value) + \
-                (self.dice_weight / total_weight * dice_loss_value) + \
-                (bce_weight / total_weight * bce_loss_value)
-        else:
-            return (self.skeleton_recall_weight * skeleton_recall_loss_value) + \
-                (self.dice_weight * dice_loss_value) + \
-                (base_bce_weight * bce_loss_value)
+        return (self.skeleton_recall_weight * skeleton_recall_loss_value) + \
+            (self.dice_weight * dice_loss_value) + \
+            (base_bce_weight * bce_loss_value)
 
 
 def hard_dice_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:

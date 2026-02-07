@@ -66,8 +66,10 @@ SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT = load_as(
     "SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT", float, 0.0)
 SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING = load_as_bool(
     "SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING", False)
-SAM_LORA_JUNCTION_HARD_NEGATIVE_MINING = load_as_bool(
-    "SAM_LORA_JUNCTION_HARD_NEGATIVE_MINING", False)
+SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE = load_as(
+    "SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE", float, 1.0)
+SAM_LORA_JUNCTION_BOOST = load_as(
+    "SAM_LORA_JUNCTION_BOOST", float, 0.5)
 
 EARLY_STOPPING_PATIENCE = load_as("EARLY_STOPPING_PATIENCE", int, 15)
 EARLY_STOPPING_DELTA = load_as("EARLY_STOPPING_DELTA", float, 0.005)
@@ -188,7 +190,8 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "skeleton_recall_loss_weight": SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT,
             "loss_function": SkeletonRecallDiceBCELoss.__name__ if SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT > 0.0 else ClDiceDiceBCELoss.__name__,
             "junction_heatmap_weighting": SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING,
-            "junction_hard_negative_mining": SAM_LORA_JUNCTION_HARD_NEGATIVE_MINING,
+            "junction_heatmap_weight_scale": SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE,
+            "junction_boost": SAM_LORA_JUNCTION_BOOST,
         },
     )
 
@@ -271,12 +274,16 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
     if SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT > 0.0:
         loss_fn = SkeletonRecallDiceBCELoss(skeleton_recall_weight=SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT,
                                             dice_weight=SAM_LORA_DICE_LOSS_WEIGHT,
-                                            upsample_lowres_logits=SAM_LORA_UPSAMPLE_LOWRES_LOGITS)
+                                            upsample_lowres_logits=SAM_LORA_UPSAMPLE_LOWRES_LOGITS,
+                                            heatmap_weight_scale=SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE,
+                                            junction_boost=SAM_LORA_JUNCTION_BOOST)
     else:
         loss_fn = ClDiceDiceBCELoss(skeletonize_iter=SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS,
                                     cl_dice_weight=SAM_LORA_CL_DICE_LOSS_WEIGHT,
                                     dice_weight=SAM_LORA_DICE_LOSS_WEIGHT,
-                                    upsample_lowres_logits=SAM_LORA_UPSAMPLE_LOWRES_LOGITS)
+                                    upsample_lowres_logits=SAM_LORA_UPSAMPLE_LOWRES_LOGITS,
+                                    heatmap_weight_scale=SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE,
+                                    junction_boost=SAM_LORA_JUNCTION_BOOST)
 
     trainable_params = get_trainable_params(sam_lora)
     for name, p in trainable_params:
@@ -324,8 +331,7 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
             loss = loss_fn(
                 output_logits,
                 target_masks,
-                heatmap_weights if SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING else None,
-                hard_negative_mining=SAM_LORA_JUNCTION_HARD_NEGATIVE_MINING
+                heatmap_weights if SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING else None
             )
             total_training_loss += loss.item() * len(batched_input)
 
@@ -357,8 +363,7 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                 loss = loss_fn(
                     output_logits,
                     target_masks,
-                    heatmap_weights if SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING else None,
-                    hard_negative_mining=SAM_LORA_JUNCTION_HARD_NEGATIVE_MINING
+                    heatmap_weights if SAM_LORA_USE_JUNCTION_HEATMAP_WEIGHTING else None
                 )
                 total_validation_loss += loss.item() * len(batched_input)
 

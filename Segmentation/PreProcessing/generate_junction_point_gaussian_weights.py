@@ -181,6 +181,17 @@ def process_images():
             # Create zero heatmap if no points annotations found
             heatmap = np.zeros((height, width), dtype=np.float32)
 
+        num_nonzero_pixels = np.sum(heatmap > 0)
+        print(f"  Heatmap non-zero pixels: {num_nonzero_pixels}")
+        px_mean = heatmap.mean()
+        print(f"  Heatmap mean value: {px_mean:.6f}")
+        px_over_zero_mean = heatmap[heatmap > 0].mean() if num_nonzero_pixels > 0 else 0.0
+        print(f"  Heatmap mean value (non-zero pixels): {px_over_zero_mean:.6f}")
+        heatmap_max = heatmap.max()
+        print(f"  Heatmap max value: {heatmap_max:.6f}")
+        num_max_pixels = np.sum(heatmap == heatmap_max)
+        print(f"  Heatmap max pixels: {num_max_pixels}")
+
         heatmap_filename = Path(image_name).stem + '.npy'
         heatmap_path = OUTPUT_DIR / heatmap_filename
         np.save(heatmap_path, heatmap)
