@@ -77,21 +77,32 @@ class BCEWithLogitsLoss(nn.Module):
                 heatmap_weights: torch.Tensor | None = None,
                 pixel_mask: torch.Tensor | None = None) -> torch.Tensor:
         pixel_bce = self.bce(logits, targets)
-        pixel_bce_flat = pixel_bce.view(pixel_bce.shape[0], -1)
 
+        base_pixel_bce_flat = pixel_bce.view(pixel_bce.shape[0], -1)
+        total_pixel_bce_flat = base_pixel_bce_flat
+
+        heatmap_weighted_pixel_bce_flat = torch.zeros_like(base_pixel_bce_flat)
         if heatmap_weights is not None:
             heatmap_flat = heatmap_weights.view(heatmap_weights.shape[0], -1)
-            w = (1.0 + self.heatmap_weight_scale * heatmap_flat)
-            pixel_bce_flat = pixel_bce_flat * w
+            heatmap_weighted_pixel_bce_flat = base_pixel_bce_flat * \
+                (self.heatmap_weight_scale * heatmap_flat)
+            total_pixel_bce_flat = base_pixel_bce_flat + heatmap_weighted_pixel_bce_flat
 
         if pixel_mask is not None:
             mask_flat = pixel_mask.view(pixel_mask.shape[0], -1)
-            sample_bce = (pixel_bce_flat * mask_flat).sum(dim=1) / \
-                mask_flat.sum(dim=1).clamp(min=1)
+            divider = mask_flat.sum(dim=1).clamp(min=1)
+            sample_bce = (total_pixel_bce_flat *
+                          mask_flat).sum(dim=1) / divider
+            sample_base_bce = (base_pixel_bce_flat *
+                               mask_flat).sum(dim=1) / divider
+            sample_heatmap_bce = (
+                heatmap_weighted_pixel_bce_flat * mask_flat).sum(dim=1) / divider
         else:
-            sample_bce = pixel_bce_flat.mean(dim=1)
+            sample_bce = total_pixel_bce_flat.mean(dim=1)
+            sample_base_bce = base_pixel_bce_flat.mean(dim=1)
+            sample_heatmap_bce = heatmap_weighted_pixel_bce_flat.mean(dim=1)
 
-        return sample_bce.mean()
+        return sample_bce.mean(), sample_base_bce.mean(), sample_heatmap_bce.mean()
 
 
 class FocalLoss(nn.Module):
@@ -115,21 +126,35 @@ class FocalLoss(nn.Module):
         alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
 
         pixel_focal = alpha_t * focal_weight * pixel_bce
-        pixel_focal_flat = pixel_focal.view(pixel_focal.shape[0], -1)
 
+        base_pixel_focalloss_flat = pixel_focal.view(pixel_focal.shape[0], -1)
+        total_pixel_focalloss_flat = base_pixel_focalloss_flat
+
+        heatmap_weighted_pixel_focalloss_flat = torch.zeros_like(
+            base_pixel_focalloss_flat)
         if heatmap_weights is not None:
             heatmap_flat = heatmap_weights.view(heatmap_weights.shape[0], -1)
-            w = 1.0 + self.heatmap_weight_scale * heatmap_flat
-            pixel_focal_flat = pixel_focal_flat * w
+            heatmap_weighted_pixel_focalloss_flat = base_pixel_focalloss_flat * \
+                (self.heatmap_weight_scale * heatmap_flat)
+            total_pixel_focalloss_flat = base_pixel_focalloss_flat + \
+                heatmap_weighted_pixel_focalloss_flat
 
         if pixel_mask is not None:
             mask_flat = pixel_mask.view(pixel_mask.shape[0], -1)
-            sample_focal = (pixel_focal_flat * mask_flat).sum(dim=1) / \
-                mask_flat.sum(dim=1).clamp(min=1)
+            divider = mask_flat.sum(dim=1).clamp(min=1)
+            sample_focalloss = (total_pixel_focalloss_flat *
+                                mask_flat).sum(dim=1) / divider
+            sample_base_focalloss = (
+                base_pixel_focalloss_flat * mask_flat).sum(dim=1) / divider
+            sample_heatmap_focalloss = (
+                heatmap_weighted_pixel_focalloss_flat * mask_flat).sum(dim=1) / divider
         else:
-            sample_focal = pixel_focal_flat.mean(dim=1)
+            sample_focalloss = total_pixel_focalloss_flat.mean(dim=1)
+            sample_base_focalloss = base_pixel_focalloss_flat.mean(dim=1)
+            sample_heatmap_focalloss = heatmap_weighted_pixel_focalloss_flat.mean(
+                dim=1)
 
-        return sample_focal.mean()
+        return sample_focalloss.mean(), sample_base_focalloss.mean(), sample_heatmap_focalloss.mean()
 
 
 class SoftDiceLoss(nn.Module):
@@ -241,7 +266,9 @@ class JunctionRegionLoss(nn.Module):
 
         if self.loss_type == "focal" or self.loss_type == "bce":
             # Pixel-level loss: average only over junction pixels via pixel_mask
-            return self.loss_fn(logits, targets, pixel_mask=junction_mask)
+            total_loss, base_loss, heatmap_loss = self.loss_fn(
+                logits, targets, pixel_mask=junction_mask)
+            return total_loss
         else:
             # Ratio-based losses (dice, cldice, skeleton_recall):
             # mask logits to large negative outside junctions (sigmoid → 0)
@@ -350,21 +377,23 @@ class CombinedLoss(nn.Module):
                 size=logit_spatial, mode='bilinear', align_corners=False)
 
         total_loss = torch.tensor(0.0, device=low_res_logits.device)
-        bce_loss = torch.tensor(0.0, device=low_res_logits.device)
-        focal_loss = torch.tensor(0.0, device=low_res_logits.device)
+        bce_total, bce_base, bce_heatmap_weighted = torch.tensor(0.0, device=low_res_logits.device), torch.tensor(
+            0.0, device=low_res_logits.device), torch.tensor(0.0, device=low_res_logits.device)
+        focal_loss_total, focal_loss_base, focal_loss_heatmap_weighted = torch.tensor(0.0, device=low_res_logits.device), torch.tensor(
+            0.0, device=low_res_logits.device), torch.tensor(0.0, device=low_res_logits.device)
         dice_loss = torch.tensor(0.0, device=low_res_logits.device)
         cl_dice_loss = torch.tensor(0.0, device=low_res_logits.device)
         skeleton_recall_loss = torch.tensor(0.0, device=low_res_logits.device)
         junction_loss = torch.tensor(0.0, device=low_res_logits.device)
 
         if self.bce_weight > 0:
-            bce_loss = self.bce_weight * self.bce_loss(
+            bce_total, bce_base, bce_heatmap_weighted = self.bce_weight * self.bce_loss(
                 low_res_logits, targets_resized, heatmap_weights_resized)
-            total_loss = total_loss + bce_loss
+            total_loss = total_loss + bce_total
         if self.focal_weight > 0:
-            focal_loss = self.focal_weight * self.focal_loss(
+            focal_loss_total = self.focal_weight * self.focal_loss(
                 low_res_logits, targets_resized, heatmap_weights_resized)
-            total_loss = total_loss + focal_loss
+            total_loss = total_loss + focal_loss_total
         if self.dice_weight > 0:
             dice_loss = self.dice_weight * self.dice_loss(
                 low_res_logits, targets_resized)
@@ -382,7 +411,8 @@ class CombinedLoss(nn.Module):
                 low_res_logits, targets_resized, heatmap_weights_resized)
             total_loss = total_loss + junction_loss
 
-        return total_loss, bce_loss, focal_loss, dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss
+        return total_loss, bce_total, bce_base, bce_heatmap_weighted, focal_loss_total, focal_loss_base, focal_loss_heatmap_weighted, \
+            dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss
 
 
 def hard_dice_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -449,7 +479,9 @@ def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, de
                                    for d in outputs], dim=0)
         output_mask = outputs[0]['masks'].squeeze(0)
 
-        losses.append(eval_loss_fn(output_logits, mask).item())
+        total_loss, _, _, _, _, _, _, _, _, _, _ = eval_loss_fn(
+            output_logits, mask)
+        losses.append(total_loss.item())
         hard_dice_scores.append(hard_dice_score(output_mask, mask).item())
         iou_scores.append(iou_score(output_mask, mask).item())
 
