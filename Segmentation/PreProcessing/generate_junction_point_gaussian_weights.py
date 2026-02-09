@@ -32,8 +32,8 @@ HIGHRES_HEATMAP_DIR_NAME = os.getenv(
 HEATMAP_VISUALIZATION_DIR_NAME = os.getenv(
     "HEATMAP_VISUALIZATION_DIR_NAME", "heatmap_visualizations")
 
-DATASET_JUNCTION_WEIGHT_CVAT_XML_PATH = os.getenv(
-    "DATASET_JUNCTION_WEIGHT_CVAT_XML_PATH", None)
+DATASET_JUNCTION_COORDS_CVAT_XML_PATH = os.getenv(
+    "DATASET_JUNCTION_COORDS_CVAT_XML_PATH", None)
 DATASET_JUNCTION_WEIGHT_SIGMA = load_as(
     "DATASET_JUNCTION_WEIGHT_SIGMA", float, 30.0)
 DATASET_JUNCTION_WEIGHT_CLIP_THRESHOLD = load_as(
@@ -41,9 +41,9 @@ DATASET_JUNCTION_WEIGHT_CLIP_THRESHOLD = load_as(
 DATASET_JUNCTION_WEIGHT_RADIUS_MULTIPLIER = load_as(
     "DATASET_JUNCTION_WEIGHT_RADIUS_MULTIPLIER", float, 3.0)
 
-if RAW_DATA_DIR is None or DATASET_JUNCTION_WEIGHT_CVAT_XML_PATH is None:
+if RAW_DATA_DIR is None or DATASET_JUNCTION_COORDS_CVAT_XML_PATH is None:
     raise ValueError(
-        "RAW_DATA_DIR and DATASET_JUNCTION_WEIGHT_CVAT_XML_PATH environment variables must be set")
+        "RAW_DATA_DIR and DATASET_JUNCTION_COORDS_CVAT_XML_PATH environment variables must be set")
 
 IMAGE_DIR = Path(RAW_DATA_DIR) / HIGHRES_IMG_DIR_NAME
 MASK_DIR = Path(RAW_DATA_DIR) / HIGHRES_MASK_DIR_NAME
@@ -155,9 +155,9 @@ def visualize_heatmap_overlay(
 
 def process_images():
     print(
-        f"Loading CVAT annotations from: {DATASET_JUNCTION_WEIGHT_CVAT_XML_PATH}")
+        f"Loading CVAT annotations from: {DATASET_JUNCTION_COORDS_CVAT_XML_PATH}")
 
-    points_per_image = parse_cvat_xml(DATASET_JUNCTION_WEIGHT_CVAT_XML_PATH)
+    points_per_image = parse_cvat_xml(DATASET_JUNCTION_COORDS_CVAT_XML_PATH)
     print(f"Found {len(points_per_image)} annotated images in XML")
 
     # Get all images in the image directory
