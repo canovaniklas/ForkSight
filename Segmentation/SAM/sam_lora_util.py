@@ -350,28 +350,39 @@ class CombinedLoss(nn.Module):
                 size=logit_spatial, mode='bilinear', align_corners=False)
 
         total_loss = torch.tensor(0.0, device=low_res_logits.device)
+        bce_loss = torch.tensor(0.0, device=low_res_logits.device)
+        focal_loss = torch.tensor(0.0, device=low_res_logits.device)
+        dice_loss = torch.tensor(0.0, device=low_res_logits.device)
+        cl_dice_loss = torch.tensor(0.0, device=low_res_logits.device)
+        skeleton_recall_loss = torch.tensor(0.0, device=low_res_logits.device)
+        junction_loss = torch.tensor(0.0, device=low_res_logits.device)
 
         if self.bce_weight > 0:
-            total_loss = total_loss + self.bce_weight * self.bce_loss(
+            bce_loss = self.bce_weight * self.bce_loss(
                 low_res_logits, targets_resized, heatmap_weights_resized)
+            total_loss = total_loss + bce_loss
         if self.focal_weight > 0:
-            total_loss = total_loss + self.focal_weight * self.focal_loss(
+            focal_loss = self.focal_weight * self.focal_loss(
                 low_res_logits, targets_resized, heatmap_weights_resized)
+            total_loss = total_loss + focal_loss
         if self.dice_weight > 0:
-            total_loss = total_loss + self.dice_weight * self.dice_loss(
+            dice_loss = self.dice_weight * self.dice_loss(
                 low_res_logits, targets_resized)
+            total_loss = total_loss + dice_loss
         if self.cl_dice_weight > 0:
-            total_loss = total_loss + self.cl_dice_weight * self.cl_dice_loss(
+            cl_dice_loss = self.cl_dice_weight * self.cl_dice_loss(
                 low_res_logits, targets_resized)
+            total_loss = total_loss + cl_dice_loss
         if self.skeleton_recall_weight > 0:
-            total_loss = total_loss + self.skeleton_recall_weight * self.skeleton_recall_loss(
+            skeleton_recall_loss = self.skeleton_recall_weight * self.skeleton_recall_loss(
                 low_res_logits, targets_resized)
-
+            total_loss = total_loss + skeleton_recall_loss
         if self.junction_region_loss is not None and heatmap_weights_resized is not None:
-            total_loss = total_loss + self.junction_patch_weight * self.junction_region_loss(
+            junction_loss = self.junction_patch_weight * self.junction_region_loss(
                 low_res_logits, targets_resized, heatmap_weights_resized)
+            total_loss = total_loss + junction_loss
 
-        return total_loss
+        return total_loss, bce_loss, focal_loss, dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss
 
 
 def hard_dice_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:

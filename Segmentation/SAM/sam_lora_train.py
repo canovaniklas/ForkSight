@@ -323,7 +323,14 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
 
         # training
         sam_lora.train()
+
         total_training_loss = 0.0
+        total_training_bce_loss = 0.0
+        total_training_focal_loss = 0.0
+        total_training_dice_loss = 0.0
+        total_training_cl_dice_loss = 0.0
+        total_training_skeleton_recall_loss = 0.0
+        total_training_junction_loss = 0.0
 
         for batched_input, target_masks, heatmap_weights in trainloader:
             batched_input = batched_input.to(device)
@@ -337,12 +344,20 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
             output_logits = torch.cat([d["low_res_logits"]
                                       for d in outputs], dim=0)
 
-            loss = loss_fn(
+            loss, bce_loss, focal_loss, dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss = loss_fn(
                 output_logits,
                 target_masks,
                 heatmap_weights if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
             )
+
             total_training_loss += loss.item() * len(batched_input)
+            total_training_bce_loss += bce_loss.item() * len(batched_input)
+            total_training_focal_loss += focal_loss.item() * len(batched_input)
+            total_training_dice_loss += dice_loss.item() * len(batched_input)
+            total_training_cl_dice_loss += cl_dice_loss.item() * len(batched_input)
+            total_training_skeleton_recall_loss += skeleton_recall_loss.item() * \
+                len(batched_input)
+            total_training_junction_loss += junction_loss.item() * len(batched_input)
 
             loss.backward()
 
@@ -369,21 +384,32 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                 output_logits = torch.cat([d["low_res_logits"]
                                           for d in outputs], dim=0)
 
-                loss = loss_fn(
+                loss, _, _, _, _, _, _ = loss_fn(
                     output_logits,
                     target_masks,
                     heatmap_weights if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
                 )
+
                 total_validation_loss += loss.item() * len(batched_input)
 
         # epoch metrics
         num_training_samples = len(trainloader) * trainloader.batch_size
         mean_training_loss = total_training_loss / num_training_samples
+        mean_training_bce_loss = total_training_bce_loss / num_training_samples
+        mean_training_focal_loss = total_training_focal_loss / num_training_samples
+        mean_training_dice_loss = total_training_dice_loss / num_training_samples
+        mean_training_cl_dice_loss = total_training_cl_dice_loss / num_training_samples
+        mean_training_skeleton_recall_loss = total_training_skeleton_recall_loss / \
+            num_training_samples
+        mean_training_junction_loss = total_training_junction_loss / num_training_samples
+
         num_validation_samples = len(
             validationloader) * validationloader.batch_size
         mean_validation_loss = total_validation_loss / num_validation_samples
 
         print(f"    Train Loss: {mean_training_loss:.4f}")
+        print(f"        BCE: {mean_training_bce_loss:.4f}, Focal: {mean_training_focal_loss:.4f}, Dice: {mean_training_dice_loss:.4f}, CL_Dice: {mean_training_cl_dice_loss:.4f}, Skeleton Recall: {mean_training_skeleton_recall_loss:.4f}, Junction: {mean_training_junction_loss:.4f}")
+
         print(f"    Validation Loss: {mean_validation_loss:.4f}")
         print(f"    Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
 
