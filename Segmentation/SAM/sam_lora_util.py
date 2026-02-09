@@ -261,20 +261,28 @@ class JunctionRegionLoss(nn.Module):
             return torch.tensor(0.0, device=logits.device)
 
         junction_mask = (heatmap_weights > 0).float()
-        if junction_mask.sum() == 0:
+
+        # identify and filter samples in batch that contain junctions (heatmap pixels > 0)
+        # to avoid computing loss on samples without junctions, which leads to dilution of loss
+        # because many patches don't have junctions and contribute 0 loss, but still count in the average
+        has_junctions = junction_mask.view(
+            junction_mask.shape[0], -1).sum(dim=1) > 0
+        if has_junctions.sum() == 0:
             return torch.tensor(0.0, device=logits.device)
+        valid_logits = logits[has_junctions]
+        valid_targets = targets[has_junctions]
+        valid_junction_mask = junction_mask[has_junctions]
 
         if self.loss_type == "focal" or self.loss_type == "bce":
             # Pixel-level loss: average only over junction pixels via pixel_mask
             total_loss, base_loss, heatmap_loss = self.loss_fn(
-                logits, targets, pixel_mask=junction_mask)
+                valid_logits, valid_targets, pixel_mask=valid_junction_mask)
             return total_loss
         else:
-            # Ratio-based losses (dice, cldice, skeleton_recall):
-            # mask logits to large negative outside junctions (sigmoid → 0)
-            masked_logits = logits * junction_mask + \
-                (-1e4) * (1 - junction_mask)
-            masked_targets = targets * junction_mask
+            # Ratio-based losses (dice, cldice, skeleton_recall): mask logits to large negative outside junctions (sigmoid → 0)
+            masked_logits = valid_logits * valid_junction_mask + \
+                (-1e4) * (1 - valid_junction_mask)
+            masked_targets = valid_targets * valid_junction_mask
             return self.loss_fn(masked_logits, masked_targets)
 
 

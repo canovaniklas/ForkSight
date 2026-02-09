@@ -425,13 +425,16 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         mean_validation_loss = total_validation_loss / num_validation_samples
 
         print(f"    Train Loss: {mean_training_loss:.4f}")
-        print(f"        BCE: {mean_training_bce_loss:.4f} (base: {mean_training_bce_base_loss:.4f}, heatmap-weighted: {mean_training_bce_heatmap_weighted_loss:.4f})")
-        print(f"        Focal: {mean_training_focal_loss:.4f} (base: {mean_training_focal_base_loss:.4f}, heatmap-weighted: {mean_training_focal_heatmap_weighted_loss:.4f})")
-        print(f"        Dice: {mean_training_dice_loss:.4f}")
-        print(f"        CL_Dice: {mean_training_cl_dice_loss:.4f}")
+        print(f"        BCE (weight {SAM_LORA_BCE_LOSS_WEIGHT}): {mean_training_bce_loss:.4f} (base: {mean_training_bce_base_loss:.4f}, heatmap-weighted: {mean_training_bce_heatmap_weighted_loss:.4f})")
+        print(f"        Focal (weight {SAM_LORA_FOCAL_LOSS_WEIGHT}): {mean_training_focal_loss:.4f} (base: {mean_training_focal_base_loss:.4f}, heatmap-weighted: {mean_training_focal_heatmap_weighted_loss:.4f})")
         print(
-            f"        Skeleton Recall: {mean_training_skeleton_recall_loss:.4f}")
-        print(f"        Junction: {mean_training_junction_loss:.4f}")
+            f"        Dice (weight {SAM_LORA_DICE_LOSS_WEIGHT}): {mean_training_dice_loss:.4f}")
+        print(
+            f"        ClDice (weight {SAM_LORA_CL_DICE_LOSS_WEIGHT}): {mean_training_cl_dice_loss:.4f}")
+        print(
+            f"        Skeleton Recall (weight {SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT}): {mean_training_skeleton_recall_loss:.4f}")
+        print(
+            f"        Junction (weight {SAM_LORA_JUNCTION_PATCH_WEIGHT}, type {SAM_LORA_JUNCTION_LOSS_TYPE}): {mean_training_junction_loss:.4f}")
 
         print(f"    Validation Loss: {mean_validation_loss:.4f}")
         print(f"    Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
