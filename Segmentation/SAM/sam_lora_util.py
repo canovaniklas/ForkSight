@@ -387,12 +387,18 @@ class CombinedLoss(nn.Module):
         junction_loss = torch.tensor(0.0, device=low_res_logits.device)
 
         if self.bce_weight > 0:
-            bce_total, bce_base, bce_heatmap_weighted = self.bce_weight * self.bce_loss(
+            bce_total, bce_base, bce_heatmap_weighted = self.bce_loss(
                 low_res_logits, targets_resized, heatmap_weights_resized)
+            bce_total = self.bce_weight * bce_total
+            bce_base = self.bce_weight * bce_base
+            bce_heatmap_weighted = self.bce_weight * bce_heatmap_weighted
             total_loss = total_loss + bce_total
         if self.focal_weight > 0:
-            focal_loss_total = self.focal_weight * self.focal_loss(
+            focal_loss_total, focal_loss_base, focal_loss_heatmap_weighted = self.focal_loss(
                 low_res_logits, targets_resized, heatmap_weights_resized)
+            focal_loss_total = self.focal_weight * focal_loss_total
+            focal_loss_base = self.focal_weight * focal_loss_base
+            focal_loss_heatmap_weighted = self.focal_weight * focal_loss_heatmap_weighted
             total_loss = total_loss + focal_loss_total
         if self.dice_weight > 0:
             dice_loss = self.dice_weight * self.dice_loss(
