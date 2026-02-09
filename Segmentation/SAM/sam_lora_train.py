@@ -326,7 +326,11 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
 
         total_training_loss = 0.0
         total_training_bce_loss = 0.0
+        total_training_bce_base_loss = 0.0
+        total_training_bce_heatmap_weighted_loss = 0.0
         total_training_focal_loss = 0.0
+        total_training_focal_base_loss = 0.0
+        total_training_focal_heatmap_weighted_loss = 0.0
         total_training_dice_loss = 0.0
         total_training_cl_dice_loss = 0.0
         total_training_skeleton_recall_loss = 0.0

@@ -157,8 +157,8 @@ def visualize_augmented_heatmap(img_tensor: torch.Tensor, hm_tensor: torch.Tenso
 
     _, ax = plt.subplots(1, 1, figsize=(8, 8))
     ax.imshow(img_np, cmap="gray")
-    im = ax.imshow(hm_np, cmap="hot", alpha=0.5,
-                   interpolation="bilinear", vmin=0, vmax=1)
+    ax.imshow(hm_np, cmap="hot", alpha=0.5,
+              interpolation="bilinear", vmin=0, vmax=1)
     ax.axis("off")
     plt.tight_layout()
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
