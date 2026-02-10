@@ -11,7 +11,7 @@ from pathlib import Path
 import wandb
 
 from Segmentation.SAM.sam_lora import SamLoRA
-from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, MyHutopoLoss, SegmentationDataset, evaluate_model, get_batched_input_list
+from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, HuTopoLoss, SegmentationDataset, evaluate_model, get_batched_input_list
 from Segmentation.Util.env_utils import load_as, load_as_bool, load_segmentation_env
 from Segmentation.Util.dataset_util import get_base_images
 
@@ -297,7 +297,7 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                            junction_loss_type=SAM_LORA_JUNCTION_LOSS_TYPE)
 
     if LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH is not None:
-        topo_loss_fn = MyHutopoLoss(
+        topo_loss_fn = HuTopoLoss(
             topological_loss_weight=LOSS_TOPOLOGICAL_LOSS_WEIGHT, base_loss=LOSS_TOPOLOGICAL_LOSS_BASE_LOSS)
 
     trainable_params = get_trainable_params(sam_lora)

@@ -430,9 +430,9 @@ class CombinedLoss(nn.Module):
             dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss
 
 
-class MyHutopoLoss(nn.Module):
+class HuTopoLoss(nn.Module):
     def __init__(self, topological_loss_weight: float, base_loss: str = "bce", patch_size: int = 128):
-        super(MyHutopoLoss, self).__init__()
+        super(HuTopoLoss, self).__init__()
         self.topoloss_weight = topological_loss_weight
         self.base_loss = base_loss
         self.patch_size = patch_size
@@ -457,6 +457,10 @@ class MyHutopoLoss(nn.Module):
         return patches.contiguous().view(-1, logits.size(1), self.patch_size, self.patch_size)
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor):
+        targets = targets.to(device=logits.device, dtype=torch.float32)
+        targets = F.interpolate(targets, size=(
+            logits.shape[-2], logits.shape[-1]), mode='nearest')
+
         if self.base_loss == "bce" or self.base_loss == "focal":
             base_loss, _, _ = self.base_loss_fn(logits, targets)
         else:
