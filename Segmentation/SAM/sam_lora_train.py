@@ -1,9 +1,8 @@
-from datetime import datetime
 import os
+from datetime import datetime
 import random
 import sys
 from zoneinfo import ZoneInfo
-
 from segment_anything import sam_model_registry
 import numpy as np
 import torch
@@ -12,7 +11,7 @@ from pathlib import Path
 import wandb
 
 from Segmentation.SAM.sam_lora import SamLoRA
-from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, SegmentationDataset, evaluate_model, get_batched_input_list
+from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, MyHutopoLoss, SegmentationDataset, evaluate_model, get_batched_input_list
 from Segmentation.Util.env_utils import load_as, load_as_bool, load_segmentation_env
 from Segmentation.Util.dataset_util import get_base_images
 
@@ -56,29 +55,32 @@ SAM_LORA_RANK = load_as("SAM_LORA_RANK", int, 4)
 SAM_LORA_SCHEDULER_TYPE = os.getenv("SAM_LORA_SCHEDULER_TYPE", "OneCycleLR")
 
 SAM_LORA_BCE_LOSS_WEIGHT = load_as("SAM_LORA_BCE_LOSS_WEIGHT", float, 0.1)
-
 SAM_LORA_FOCAL_LOSS_WEIGHT = load_as("SAM_LORA_FOCAL_LOSS_WEIGHT", float, 0.0)
 SAM_LORA_FOCAL_ALPHA = load_as("SAM_LORA_FOCAL_ALPHA", float, 0.25)
 SAM_LORA_FOCAL_GAMMA = load_as("SAM_LORA_FOCAL_GAMMA", float, 2.0)
-
 SAM_LORA_DICE_LOSS_WEIGHT = load_as("SAM_LORA_DICE_LOSS_WEIGHT", float, 0.45)
-
 SAM_LORA_CL_DICE_LOSS_WEIGHT = load_as(
     "SAM_LORA_CL_DICE_LOSS_WEIGHT", float, 0.45)
 SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS = load_as(
     "SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS", int, 15)
-
 SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT = load_as(
     "SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT", float, 0.0)
-
 # set to 0.0 to disable junction heatmap weighting
 SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE = load_as(
     "SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE", float, 0.0)
-
 # set None to disable junction patch loss
 SAM_LORA_JUNCTION_LOSS_TYPE = os.getenv("SAM_LORA_JUNCTION_LOSS_TYPE", None)
 SAM_LORA_JUNCTION_PATCH_WEIGHT = load_as(
     "SAM_LORA_JUNCTION_PATCH_WEIGHT", float, 0.0)
+
+LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH = load_as(
+    "LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH", int, None)
+LOSS_TOPOLOGICAL_LOSS_WEIGHT = load_as(
+    "LOSS_TOPOLOGICAL_LOSS_WEIGHT", float, 0.0001)
+LOSS_TOPOLOGICAL_LOSS_BASE_LOSS = os.getenv(
+    "LOSS_TOPOLOGICAL_LOSS_BASE_LOSS", "bce")
+LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS = load_as(
+    "LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS", int, None)
 
 EARLY_STOPPING_PATIENCE = load_as("EARLY_STOPPING_PATIENCE", int, 15)
 EARLY_STOPPING_DELTA = load_as("EARLY_STOPPING_DELTA", float, 0.005)
@@ -294,6 +296,10 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                            junction_patch_weight=SAM_LORA_JUNCTION_PATCH_WEIGHT,
                            junction_loss_type=SAM_LORA_JUNCTION_LOSS_TYPE)
 
+    if LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH is not None:
+        topo_loss_fn = MyHutopoLoss(
+            topological_loss_weight=LOSS_TOPOLOGICAL_LOSS_WEIGHT, base_loss=LOSS_TOPOLOGICAL_LOSS_BASE_LOSS)
+
     trainable_params = get_trainable_params(sam_lora)
     for name, p in trainable_params:
         print(f"Training: {name} with {p.numel()} parameters")
@@ -325,22 +331,15 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         sam_lora.train()
 
         total_training_loss = 0.0
-        total_training_bce_loss = 0.0
-        total_training_bce_base_loss = 0.0
-        total_training_bce_heatmap_weighted_loss = 0.0
-        total_training_focal_loss = 0.0
-        total_training_focal_base_loss = 0.0
-        total_training_focal_heatmap_weighted_loss = 0.0
-        total_training_dice_loss = 0.0
-        total_training_cl_dice_loss = 0.0
-        total_training_skeleton_recall_loss = 0.0
-        total_training_junction_loss = 0.0
+        total_loss_terms = {}
 
         for batched_input, target_masks, heatmap_weights in trainloader:
             batched_input = batched_input.to(device)
             target_masks = target_masks.to(device)
             heatmap_weights = heatmap_weights.to(device)
+
             batched_input = get_batched_input_list(batched_input)
+            batch_size = len(batched_input)
 
             optimizer.zero_grad()
             outputs = sam_lora(batched_input=batched_input,
@@ -348,32 +347,47 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
             output_logits = torch.cat([d["low_res_logits"]
                                       for d in outputs], dim=0)
 
-            loss, bce_total, bce_base, bce_heatmap_weighted, focal_loss_total, focal_loss_base, focal_loss_heatmap_weighted, \
-                dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss = loss_fn(
-                    output_logits,
-                    target_masks,
-                    heatmap_weights if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
-                )
+            if LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH is None or epoch < LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH:
+                loss, bce_total, bce_base, bce_heatmap_weighted, focal_loss_total, focal_loss_base, focal_loss_heatmap_weighted, \
+                    dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss = loss_fn(
+                        output_logits,
+                        target_masks,
+                        heatmap_weights if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
+                    )
 
-            total_training_loss += loss.item() * len(batched_input)
-            total_training_bce_loss += bce_total.item() * len(batched_input)
-            total_training_bce_base_loss += bce_base.item() * len(batched_input)
-            total_training_bce_heatmap_weighted_loss += bce_heatmap_weighted.item() * \
-                len(batched_input)
-            total_training_focal_loss += focal_loss_total.item() * len(batched_input)
-            total_training_focal_base_loss += focal_loss_base.item() * len(batched_input)
-            total_training_focal_heatmap_weighted_loss += focal_loss_heatmap_weighted.item() * \
-                len(batched_input)
-            total_training_dice_loss += dice_loss.item() * len(batched_input)
-            total_training_cl_dice_loss += cl_dice_loss.item() * len(batched_input)
-            total_training_skeleton_recall_loss += skeleton_recall_loss.item() * \
-                len(batched_input)
-            total_training_junction_loss += junction_loss.item() * len(batched_input)
+                total_training_loss += loss.item() * batch_size
+                total_loss_terms["BCE"] = total_loss_terms.get(
+                    "BCE", 0.0) + bce_total.item() * batch_size
+                total_loss_terms["BCE (base)"] = total_loss_terms.get(
+                    "BCE (base)", 0.0) + bce_base.item() * batch_size
+                total_loss_terms["BCE (heatmap weighted)"] = total_loss_terms.get(
+                    "BCE (heatmap weighted)", 0.0) + bce_heatmap_weighted.item() * batch_size
+                total_loss_terms["Focal"] = total_loss_terms.get(
+                    "Focal", 0.0) + focal_loss_total.item() * batch_size
+                total_loss_terms["Focal (base)"] = total_loss_terms.get(
+                    "Focal (base)", 0.0) + focal_loss_base.item() * batch_size
+                total_loss_terms["Focal (heatmap weighted)"] = total_loss_terms.get(
+                    "Focal (heatmap weighted)", 0.0) + focal_loss_heatmap_weighted.item() * batch_size
+                total_loss_terms["Dice"] = total_loss_terms.get(
+                    "Dice", 0.0) + dice_loss.item() * batch_size
+                total_loss_terms["ClDice"] = total_loss_terms.get(
+                    "ClDice", 0.0) + cl_dice_loss.item() * batch_size
+                total_loss_terms["Skeleton Recall"] = total_loss_terms.get(
+                    "Skeleton Recall", 0.0) + skeleton_recall_loss.item() * batch_size
+                total_loss_terms["Junction"] = total_loss_terms.get(
+                    "Junction", 0.0) + junction_loss.item() * batch_size
+            else:
+                loss, topo_loss, base_loss = topo_loss_fn(
+                    output_logits, target_masks)
+
+                total_training_loss += loss.item() * batch_size
+                total_loss_terms["Base Loss"] = total_loss_terms.get(
+                    "Base Loss", 0.0) + base_loss.item() * batch_size
+                total_loss_terms["Topological Loss"] = total_loss_terms.get(
+                    "Topological Loss", 0.0) + topo_loss.item() * batch_size
 
             loss.backward()
-
             torch.nn.utils.clip_grad_norm_(sam_lora.parameters(), max_norm=1.0)
-
             optimizer.step()
 
             if scheduler is not None:
@@ -406,35 +420,15 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         # epoch metrics
         num_training_samples = len(trainloader) * trainloader.batch_size
         mean_training_loss = total_training_loss / num_training_samples
-        mean_training_bce_loss = total_training_bce_loss / num_training_samples
-        mean_training_bce_base_loss = total_training_bce_base_loss / num_training_samples
-        mean_training_bce_heatmap_weighted_loss = total_training_bce_heatmap_weighted_loss / \
-            num_training_samples
-        mean_training_focal_loss = total_training_focal_loss / num_training_samples
-        mean_training_focal_base_loss = total_training_focal_base_loss / num_training_samples
-        mean_training_focal_heatmap_weighted_loss = total_training_focal_heatmap_weighted_loss / \
-            num_training_samples
-        mean_training_dice_loss = total_training_dice_loss / num_training_samples
-        mean_training_cl_dice_loss = total_training_cl_dice_loss / num_training_samples
-        mean_training_skeleton_recall_loss = total_training_skeleton_recall_loss / \
-            num_training_samples
-        mean_training_junction_loss = total_training_junction_loss / num_training_samples
+        print(f"    Training Loss: {mean_training_loss:.4f}")
+
+        for loss_term_name, total_loss in total_loss_terms.items():
+            mean_loss = total_loss / num_training_samples
+            print(f"        {loss_term_name} Loss: {mean_loss:.4f}")
 
         num_validation_samples = len(
             validationloader) * validationloader.batch_size
         mean_validation_loss = total_validation_loss / num_validation_samples
-
-        print(f"    Train Loss: {mean_training_loss:.4f}")
-        print(f"        BCE (weight {SAM_LORA_BCE_LOSS_WEIGHT}): {mean_training_bce_loss:.4f} (base: {mean_training_bce_base_loss:.4f}, heatmap-weighted: {mean_training_bce_heatmap_weighted_loss:.4f})")
-        print(f"        Focal (weight {SAM_LORA_FOCAL_LOSS_WEIGHT}): {mean_training_focal_loss:.4f} (base: {mean_training_focal_base_loss:.4f}, heatmap-weighted: {mean_training_focal_heatmap_weighted_loss:.4f})")
-        print(
-            f"        Dice (weight {SAM_LORA_DICE_LOSS_WEIGHT}): {mean_training_dice_loss:.4f}")
-        print(
-            f"        ClDice (weight {SAM_LORA_CL_DICE_LOSS_WEIGHT}): {mean_training_cl_dice_loss:.4f}")
-        print(
-            f"        Skeleton Recall (weight {SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT}): {mean_training_skeleton_recall_loss:.4f}")
-        print(
-            f"        Junction (weight {SAM_LORA_JUNCTION_PATCH_WEIGHT}, type {SAM_LORA_JUNCTION_LOSS_TYPE}): {mean_training_junction_loss:.4f}")
 
         print(f"    Validation Loss: {mean_validation_loss:.4f}")
         print(f"    Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
@@ -453,6 +447,11 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
 
         # early stopping
         if early_stopping(mean_validation_loss, epoch):
+            break
+        # max epoch for topological loss
+        if LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH is not None and LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS is not None \
+                and epoch == LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH + LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS:
+            print(f"Maximum epochs for topological loss reached")
             break
 
     save_params(sam_lora, wandb_run, "final")

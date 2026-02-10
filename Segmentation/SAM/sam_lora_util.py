@@ -12,6 +12,7 @@ from PIL import Image
 import wandb
 from skimage.morphology import skeletonize, dilation, disk
 import numpy as np
+from topolosses.losses import HutopoLoss
 
 from Segmentation.SAM.sam_lora import SamLoRA
 from Segmentation.Util.env_utils import load_segmentation_env
@@ -427,6 +428,49 @@ class CombinedLoss(nn.Module):
 
         return total_loss, bce_total, bce_base, bce_heatmap_weighted, focal_loss_total, focal_loss_base, focal_loss_heatmap_weighted, \
             dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss
+
+
+class MyHutopoLoss(nn.Module):
+    def __init__(self, topological_loss_weight: float, base_loss: str = "bce", patch_size: int = 128):
+        super(MyHutopoLoss, self).__init__()
+        self.topoloss_weight = topological_loss_weight
+        self.base_loss = base_loss
+        self.patch_size = patch_size
+
+        self.topoloss_fn = HutopoLoss(
+            sigmoid=True, use_base_loss=False)
+
+        if base_loss == "bce":
+            self.base_loss_fn = BCEWithLogitsLoss()
+        elif base_loss == "focal":
+            self.base_loss_fn = FocalLoss()
+        elif base_loss == "dice":
+            self.base_loss_fn = SoftDiceLoss()
+        else:
+            raise ValueError(f"Unsupported base_loss: {base_loss}")
+
+    def _create_patches(self, logits: torch.Tensor) -> torch.Tensor:
+        # unfold to (B, C, num_patches, num_patches, patch_size, patch_size), with num_patches = H/patch_size = W/patch_size
+        patches = logits.unfold(2, self.patch_size, self.patch_size).unfold(
+            3, self.patch_size, self.patch_size)
+        # reshape to (B * num_patches, C, patch_size, patch_size)
+        return patches.contiguous().view(-1, logits.size(1), self.patch_size, self.patch_size)
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor):
+        if self.base_loss == "bce" or self.base_loss == "focal":
+            base_loss, _, _ = self.base_loss_fn(logits, targets)
+        else:
+            base_loss = self.base_loss_fn(logits, targets)
+
+        # create patches and compute topological loss on patches as indicated in paper due to computational complexity
+        # logit dimensions should be 256x256
+        logit_patches = self._create_patches(logits)
+        target_patches = self._create_patches(targets)
+
+        topo_loss = self.topoloss_weight * \
+            self.topoloss_fn(logit_patches, target_patches)
+
+        return base_loss + topo_loss, topo_loss, base_loss
 
 
 def hard_dice_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
