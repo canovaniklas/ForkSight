@@ -205,6 +205,10 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "junction_heatmap_weight_scale": SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE,
             "junction_patch_weight": SAM_LORA_JUNCTION_PATCH_WEIGHT,
             "junction_loss_type": SAM_LORA_JUNCTION_LOSS_TYPE,
+            "topological_loss_from_epoch": LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH,
+            "topological_loss_weight": LOSS_TOPOLOGICAL_LOSS_WEIGHT,
+            "topological_loss_base_loss": LOSS_TOPOLOGICAL_LOSS_BASE_LOSS,
+            "topological_loss_max_epochs": LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS
         },
     )
 
@@ -327,6 +331,8 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
     for epoch in range(SAM_LORA_MAX_EPOCHS):
         print(f"\nEpoch {epoch+1}/{SAM_LORA_MAX_EPOCHS}")
 
+        use_topological_loss = LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH is not None and epoch >= LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH
+
         # training
         sam_lora.train()
 
@@ -347,7 +353,7 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
             output_logits = torch.cat([d["low_res_logits"]
                                       for d in outputs], dim=0)
 
-            if LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH is None or epoch < LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH:
+            if not use_topological_loss:
                 loss, bce_total, bce_base, bce_heatmap_weighted, focal_loss_total, focal_loss_base, focal_loss_heatmap_weighted, \
                     dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss = loss_fn(
                         output_logits,
@@ -408,12 +414,14 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                                    multimask_output=SAM_LORA_NUM_CLASSES > 1)
                 output_logits = torch.cat([d["low_res_logits"]
                                           for d in outputs], dim=0)
-
-                loss, _, _, _, _, _, _, _, _, _, _ = loss_fn(
-                    output_logits,
-                    target_masks,
-                    heatmap_weights if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
-                )
+                if not use_topological_loss:
+                    loss, _, _, _, _, _, _, _, _, _, _ = loss_fn(
+                        output_logits,
+                        target_masks,
+                        heatmap_weights if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
+                    )
+                else:
+                    loss, _, _ = topo_loss_fn(output_logits, target_masks)
 
                 total_validation_loss += loss.item() * len(batched_input)
 
