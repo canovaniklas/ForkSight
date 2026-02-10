@@ -8,9 +8,8 @@ Gaussian weighting function and can be used for loss function weighting.
 
 import os
 import shutil
-import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -18,7 +17,7 @@ from PIL import Image
 import torch
 
 from Segmentation.Util.env_utils import load_as, load_segmentation_env
-
+from Segmentation.Util.dataset_util import parse_junction_annotations_xml
 
 load_segmentation_env()
 
@@ -56,33 +55,6 @@ OUTPUT_DIR.mkdir(parents=True)
 if VISUALIZATION_DIR.exists():
     shutil.rmtree(VISUALIZATION_DIR)
 VISUALIZATION_DIR.mkdir(parents=True)
-
-
-def parse_cvat_xml(xml_path: str) -> Dict[str, List[Tuple[float, float]]]:
-    """
-    Parse CVAT 1.1 XML file and extract point annotations per image.
-    """
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
-
-    points_per_image = {}
-
-    for image_elem in root.findall('.//image'):
-        image_name = image_elem.get('name')
-        points = []
-
-        for points_elem in image_elem.findall('.//points'):
-            points_str = points_elem.get('points')
-            if points_str:
-                coords = points_str.strip().split(',')
-                if len(coords) == 2:
-                    x, y = float(coords[0]), float(coords[1])
-                    points.append((x, y))
-
-        if points:
-            points_per_image[image_name] = points
-
-    return points_per_image
 
 
 def create_gaussian_heatmap(image_shape: Tuple[int, int], points: List[Tuple[float, float]]) -> np.ndarray:
@@ -157,7 +129,8 @@ def process_images():
     print(
         f"Loading CVAT annotations from: {DATASET_JUNCTION_COORDS_CVAT_XML_PATH}")
 
-    points_per_image = parse_cvat_xml(DATASET_JUNCTION_COORDS_CVAT_XML_PATH)
+    points_per_image = parse_junction_annotations_xml(
+        DATASET_JUNCTION_COORDS_CVAT_XML_PATH)
     print(f"Found {len(points_per_image)} annotated images in XML")
 
     # Get all images in the image directory
