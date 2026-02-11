@@ -431,10 +431,11 @@ class CombinedLoss(nn.Module):
 
 
 class HuTopoLoss(nn.Module):
-    def __init__(self, topological_loss_weight: float, base_loss: str = "bce", patch_size: int = 128):
+    def __init__(self, topological_loss_weight: float, base_loss: str = "bce", base_loss_weight: float = 1.0, patch_size: int = 128):
         super(HuTopoLoss, self).__init__()
         self.topoloss_weight = topological_loss_weight
         self.base_loss = base_loss
+        self.base_loss_weight = base_loss_weight
         self.patch_size = patch_size
 
         self.topoloss_fn = HutopoLoss(
@@ -465,6 +466,7 @@ class HuTopoLoss(nn.Module):
             base_loss, _, _ = self.base_loss_fn(logits, targets)
         else:
             base_loss = self.base_loss_fn(logits, targets)
+        base_loss = self.base_loss_weight * base_loss
 
         # create patches and compute topological loss on patches as indicated in paper due to computational complexity
         # logit dimensions should be 256x256
