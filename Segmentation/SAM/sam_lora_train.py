@@ -80,6 +80,8 @@ LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH = load_as(
     "LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH", int, None)
 LOSS_TOPOLOGICAL_LOSS_WEIGHT = load_as(
     "LOSS_TOPOLOGICAL_LOSS_WEIGHT", float, 0.1)
+LOSS_TOPOLOGICAL_LOSS_BASELOSS_WEIGHT = load_as(
+    "LOSS_TOPOLOGICAL_LOSS_BASELOSS_WEIGHT", float, 1.0)
 LOSS_TOPOLOGICAL_LOSS_BASE_LOSS = os.getenv(
     "LOSS_TOPOLOGICAL_LOSS_BASE_LOSS", "bce")
 LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS = load_as(
@@ -216,6 +218,7 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "junction_loss_type": SAM_LORA_JUNCTION_LOSS_TYPE,
             "topological_loss_from_epoch": LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH,
             "topological_loss_weight": LOSS_TOPOLOGICAL_LOSS_WEIGHT,
+            "topological_loss_base_loss_weight": LOSS_TOPOLOGICAL_LOSS_BASELOSS_WEIGHT,
             "topological_loss_base_loss": LOSS_TOPOLOGICAL_LOSS_BASE_LOSS,
             "topological_loss_max_epochs": LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS,
             "topological_loss_finetuning_checkpoint": str(SAM_LORA_TOPOLOGICAL_LOSS_FINETUNING_CHECKPOINT),
@@ -360,7 +363,9 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
     topological_loss_start_epoch = LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH if not finetune_topoloss else 0
     if finetune_topoloss or topological_loss_start_epoch is not None:
         topo_loss_fn = HuTopoLoss(
-            topological_loss_weight=LOSS_TOPOLOGICAL_LOSS_WEIGHT, base_loss=LOSS_TOPOLOGICAL_LOSS_BASE_LOSS)
+            topological_loss_weight=LOSS_TOPOLOGICAL_LOSS_WEIGHT,
+            base_loss=LOSS_TOPOLOGICAL_LOSS_BASE_LOSS,
+            base_loss_weight=LOSS_TOPOLOGICAL_LOSS_BASELOSS_WEIGHT)
 
     trainable_params = get_trainable_params(sam_lora)
     for name, p in trainable_params:
