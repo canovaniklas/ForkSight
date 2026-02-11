@@ -217,7 +217,8 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "topological_loss_from_epoch": LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH,
             "topological_loss_weight": LOSS_TOPOLOGICAL_LOSS_WEIGHT,
             "topological_loss_base_loss": LOSS_TOPOLOGICAL_LOSS_BASE_LOSS,
-            "topological_loss_max_epochs": LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS
+            "topological_loss_max_epochs": LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS,
+            "topological_loss_finetuning_checkpoint": str(SAM_LORA_TOPOLOGICAL_LOSS_FINETUNING_CHECKPOINT),
         },
     )
 
