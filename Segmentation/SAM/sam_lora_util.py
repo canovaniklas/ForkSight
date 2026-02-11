@@ -468,11 +468,11 @@ class HuTopoLoss(nn.Module):
 
         # create patches and compute topological loss on patches as indicated in paper due to computational complexity
         # logit dimensions should be 256x256
-        logit_patches = self._create_patches(logits)
-        target_patches = self._create_patches(targets)
+        #logits = self._create_patches(logits)
+        #targets = self._create_patches(targets)
 
         topo_loss = self.topoloss_weight * \
-            self.topoloss_fn(logit_patches, target_patches)
+            self.topoloss_fn(logits, targets)
 
         return base_loss + topo_loss, topo_loss, base_loss
 
