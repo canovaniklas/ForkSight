@@ -338,7 +338,9 @@ class CombinedLoss(nn.Module):
                  focal_gamma: float = 2.0,
                  skeletonize_iter: int = 15,
                  junction_patch_weight: float = 0.0,
-                 junction_loss_type: str = "skeleton_recall"):
+                 junction_loss_type: str = "skeleton_recall",
+                 topo_weight: float = 0.0,
+                 topo_patch_size: int = 64):
         super(CombinedLoss, self).__init__()
 
         self.bce_weight = bce_weight
@@ -346,6 +348,8 @@ class CombinedLoss(nn.Module):
         self.dice_weight = dice_weight
         self.cl_dice_weight = cl_dice_weight
         self.skeleton_recall_weight = skeleton_recall_weight
+        self.topo_weight = topo_weight
+        self.topo_patch_size = topo_patch_size
 
         if bce_weight > 0:
             self.bce_loss = BCEWithLogitsLoss(
@@ -360,6 +364,8 @@ class CombinedLoss(nn.Module):
             self.cl_dice_loss = SoftClDiceLoss(skeletonize_iter)
         if skeleton_recall_weight > 0:
             self.skeleton_recall_loss = SkeletonRecallLoss2D()
+        if topo_weight > 0:
+            self.topo_loss = HutopoLoss(sigmoid=True, use_base_loss=False)
 
         self.junction_patch_weight = junction_patch_weight
         self.junction_region_loss = None
@@ -369,6 +375,11 @@ class CombinedLoss(nn.Module):
                 skeletonize_iter=skeletonize_iter,
                 focal_alpha=focal_alpha,
                 focal_gamma=focal_gamma)
+
+    def _create_patches(self, tensor: torch.Tensor, patch_size: int) -> torch.Tensor:
+        patches = tensor.unfold(2, patch_size, patch_size).unfold(
+            3, patch_size, patch_size)
+        return patches.contiguous().view(-1, tensor.size(1), patch_size, patch_size)
 
     def forward(self, low_res_logits: torch.Tensor, targets: torch.Tensor,
                 heatmap_weights: torch.Tensor | None = None) -> torch.Tensor:
@@ -394,6 +405,7 @@ class CombinedLoss(nn.Module):
         cl_dice_loss = torch.tensor(0.0, device=low_res_logits.device)
         skeleton_recall_loss = torch.tensor(0.0, device=low_res_logits.device)
         junction_loss = torch.tensor(0.0, device=low_res_logits.device)
+        topo_loss = torch.tensor(0.0, device=low_res_logits.device)
 
         if self.bce_weight > 0:
             bce_total, bce_base, bce_heatmap_weighted = self.bce_loss(
@@ -425,58 +437,17 @@ class CombinedLoss(nn.Module):
             junction_loss = self.junction_patch_weight * self.junction_region_loss(
                 low_res_logits, targets_resized, heatmap_weights_resized)
             total_loss = total_loss + junction_loss
+        if self.topo_weight > 0:
+            logit_patches = self._create_patches(
+                low_res_logits, self.topo_patch_size)
+            target_patches = self._create_patches(
+                targets_resized, self.topo_patch_size)
+            topo_loss = self.topo_weight * \
+                self.topo_loss(logit_patches, target_patches)
+            total_loss = total_loss + topo_loss
 
         return total_loss, bce_total, bce_base, bce_heatmap_weighted, focal_loss_total, focal_loss_base, focal_loss_heatmap_weighted, \
-            dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss
-
-
-class HuTopoLoss(nn.Module):
-    def __init__(self, topological_loss_weight: float, base_loss: str = "bce", base_loss_weight: float = 1.0, patch_size: int = 64):
-        super(HuTopoLoss, self).__init__()
-        self.topoloss_weight = topological_loss_weight
-        self.base_loss = base_loss
-        self.base_loss_weight = base_loss_weight
-        self.patch_size = patch_size
-
-        self.topoloss_fn = HutopoLoss(
-            sigmoid=True, use_base_loss=False)
-
-        if base_loss == "bce":
-            self.base_loss_fn = BCEWithLogitsLoss()
-        elif base_loss == "focal":
-            self.base_loss_fn = FocalLoss()
-        elif base_loss == "dice":
-            self.base_loss_fn = SoftDiceLoss()
-        else:
-            raise ValueError(f"Unsupported base_loss: {base_loss}")
-
-    def _create_patches(self, logits: torch.Tensor) -> torch.Tensor:
-        # unfold to (B, C, num_patches, num_patches, patch_size, patch_size), with num_patches = H/patch_size = W/patch_size
-        patches = logits.unfold(2, self.patch_size, self.patch_size).unfold(
-            3, self.patch_size, self.patch_size)
-        # reshape to (B * num_patches, C, patch_size, patch_size)
-        return patches.contiguous().view(-1, logits.size(1), self.patch_size, self.patch_size)
-
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor):
-        targets = targets.to(device=logits.device, dtype=torch.float32)
-        targets = F.interpolate(targets, size=(
-            logits.shape[-2], logits.shape[-1]), mode='nearest')
-
-        if self.base_loss == "bce" or self.base_loss == "focal":
-            base_loss, _, _ = self.base_loss_fn(logits, targets)
-        else:
-            base_loss = self.base_loss_fn(logits, targets)
-        base_loss = self.base_loss_weight * base_loss
-
-        # create patches and compute topological loss on patches as indicated in paper
-        # logit dimensions should be 256x256 before patching
-        logits = self._create_patches(logits)
-        targets = self._create_patches(targets)
-
-        topo_loss = self.topoloss_weight * \
-            self.topoloss_fn(logits, targets)
-
-        return base_loss + topo_loss, topo_loss, base_loss
+            dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss, topo_loss
 
 
 def hard_dice_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -543,7 +514,7 @@ def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, de
                                    for d in outputs], dim=0)
         output_mask = outputs[0]['masks'].squeeze(0)
 
-        total_loss, _, _, _, _, _, _, _, _, _, _ = eval_loss_fn(
+        total_loss, _, _, _, _, _, _, _, _, _, _, _ = eval_loss_fn(
             output_logits, mask)
         losses.append(total_loss.item())
         hard_dice_scores.append(hard_dice_score(output_mask, mask).item())

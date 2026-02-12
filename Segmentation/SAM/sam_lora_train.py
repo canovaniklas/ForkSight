@@ -11,8 +11,8 @@ from pathlib import Path
 import wandb
 
 from Segmentation.SAM.sam_lora import SamLoRA
-from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, HuTopoLoss, SegmentationDataset, evaluate_model, get_batched_input_list, get_params_from_artifact
-from Segmentation.Util.env_utils import load_as, load_as_bool, load_as_tuple, load_segmentation_env
+from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, SegmentationDataset, evaluate_model, get_batched_input_list
+from Segmentation.Util.env_utils import load_as, load_as_bool, load_segmentation_env
 from Segmentation.Util.dataset_util import get_base_images
 
 load_segmentation_env()
@@ -73,19 +73,8 @@ SAM_LORA_JUNCTION_LOSS_TYPE = os.getenv("SAM_LORA_JUNCTION_LOSS_TYPE", None)
 SAM_LORA_JUNCTION_PATCH_WEIGHT = load_as(
     "SAM_LORA_JUNCTION_PATCH_WEIGHT", float, 0.0)
 
-SAM_LORA_TOPOLOGICAL_LOSS_FINETUNING_CHECKPOINT = load_as_tuple(
-    "SAM_LORA_TOPOLOGICAL_LOSS_FINETUNING_CHECKPOINT", default=None, dtype=str)
-
-LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH = load_as(
-    "LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH", int, None)
-LOSS_TOPOLOGICAL_LOSS_WEIGHT = load_as(
-    "LOSS_TOPOLOGICAL_LOSS_WEIGHT", float, 0.1)
-LOSS_TOPOLOGICAL_LOSS_BASELOSS_WEIGHT = load_as(
-    "LOSS_TOPOLOGICAL_LOSS_BASELOSS_WEIGHT", float, 1.0)
-LOSS_TOPOLOGICAL_LOSS_BASE_LOSS = os.getenv(
-    "LOSS_TOPOLOGICAL_LOSS_BASE_LOSS", "bce")
-LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS = load_as(
-    "LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS", int, 15)
+SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT = load_as(
+    "SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT", float, 0.0)
 
 
 EARLY_STOPPING_PATIENCE = load_as("EARLY_STOPPING_PATIENCE", int, 15)
@@ -216,12 +205,7 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "junction_heatmap_weight_scale": SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE,
             "junction_patch_weight": SAM_LORA_JUNCTION_PATCH_WEIGHT,
             "junction_loss_type": SAM_LORA_JUNCTION_LOSS_TYPE,
-            "topological_loss_from_epoch": LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH,
-            "topological_loss_weight": LOSS_TOPOLOGICAL_LOSS_WEIGHT,
-            "topological_loss_base_loss_weight": LOSS_TOPOLOGICAL_LOSS_BASELOSS_WEIGHT,
-            "topological_loss_base_loss": LOSS_TOPOLOGICAL_LOSS_BASE_LOSS,
-            "topological_loss_max_epochs": LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS,
-            "topological_loss_finetuning_checkpoint": str(SAM_LORA_TOPOLOGICAL_LOSS_FINETUNING_CHECKPOINT),
+            "topological_loss_weight": SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT,
         },
     )
 
@@ -254,30 +238,6 @@ def init_model(device: torch.device, verbose: bool = True) -> SamLoRA:
     if verbose:
         print(
             f"SAM model with LoRA fine-tuning initialized, on {sam_lora.device}, with {sum(p.numel() for p in sam_lora.parameters() if p.requires_grad)} trainable parameters")
-
-    return sam_lora
-
-
-def init_model_params_from_artifact(sam_lora: SamLoRA, device: torch.device, checkpoint: tuple[str, str]):
-    run_name, artifact_name = checkpoint
-
-    runs = [run for run in list(wandb.Api().runs(
-        f"{WANDB_ENTITY}/{WANDB_PROJECT}")) if run.state == "finished"]
-    run = next((r for r in runs if r.name == run_name), None)
-    if run is None:
-        raise ValueError(
-            f"No finished wandb run found with name '{run_name}'")
-
-    run_artifacts = [a for a in list(
-        run.logged_artifacts()) if a.type == "model"]
-    artifact = next(
-        (a for a in run_artifacts if a.name == artifact_name), None)
-    if artifact is None:
-        raise ValueError(
-            f"No artifact of type 'model' found with name '{artifact_name}'")
-
-    params, _ = get_params_from_artifact(artifact, device)
-    sam_lora.load_state_dict(params, strict=False)
 
     return sam_lora
 
@@ -324,13 +284,13 @@ def get_trainable_params(sam_lora: SamLoRA):
     ]
 
 
-def init_scheduler(optimizer, max_epochs, steps_per_epoch, max_lr_scale=1.0):
+def init_scheduler(optimizer, max_epochs, steps_per_epoch):
     total_steps = max_epochs * steps_per_epoch
     scheduler = None
 
     if SAM_LORA_SCHEDULER_TYPE == "OneCycleLR":
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer, max_lr=SAM_LORA_LR * max_lr_scale, total_steps=total_steps, pct_start=0.1, anneal_strategy="cos", div_factor=10.0, final_div_factor=10.0)
+            optimizer, max_lr=SAM_LORA_LR, total_steps=total_steps, pct_start=0.1, anneal_strategy="cos", div_factor=10.0, final_div_factor=10.0)
     elif SAM_LORA_SCHEDULER_TYPE == "CosineAnnealingLR":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=total_steps, eta_min=0.0001)
@@ -338,34 +298,19 @@ def init_scheduler(optimizer, max_epochs, steps_per_epoch, max_lr_scale=1.0):
     return scheduler
 
 
-def reset_lr(optimizer, max_lr_scale=1.0):
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = SAM_LORA_LR * max_lr_scale
-
-
 def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, validationloader: DataLoader, device: torch.device):
-    finetune_topoloss = SAM_LORA_TOPOLOGICAL_LOSS_FINETUNING_CHECKPOINT is not None
-
-    loss_fn = None
-    if not finetune_topoloss:
-        loss_fn = CombinedLoss(bce_weight=SAM_LORA_BCE_LOSS_WEIGHT,
-                               focal_weight=SAM_LORA_FOCAL_LOSS_WEIGHT,
-                               dice_weight=SAM_LORA_DICE_LOSS_WEIGHT,
-                               cl_dice_weight=SAM_LORA_CL_DICE_LOSS_WEIGHT,
-                               skeleton_recall_weight=SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT,
-                               heatmap_weight_scale=SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE,
-                               focal_alpha=SAM_LORA_FOCAL_ALPHA,
-                               focal_gamma=SAM_LORA_FOCAL_GAMMA,
-                               skeletonize_iter=SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS,
-                               junction_patch_weight=SAM_LORA_JUNCTION_PATCH_WEIGHT,
-                               junction_loss_type=SAM_LORA_JUNCTION_LOSS_TYPE)
-
-    topological_loss_start_epoch = LOSS_TOPOLOGICAL_LOSS_FROM_EPOCH if not finetune_topoloss else 0
-    if finetune_topoloss or topological_loss_start_epoch is not None:
-        topo_loss_fn = HuTopoLoss(
-            topological_loss_weight=LOSS_TOPOLOGICAL_LOSS_WEIGHT,
-            base_loss=LOSS_TOPOLOGICAL_LOSS_BASE_LOSS,
-            base_loss_weight=LOSS_TOPOLOGICAL_LOSS_BASELOSS_WEIGHT)
+    loss_fn = CombinedLoss(bce_weight=SAM_LORA_BCE_LOSS_WEIGHT,
+                           focal_weight=SAM_LORA_FOCAL_LOSS_WEIGHT,
+                           dice_weight=SAM_LORA_DICE_LOSS_WEIGHT,
+                           cl_dice_weight=SAM_LORA_CL_DICE_LOSS_WEIGHT,
+                           skeleton_recall_weight=SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT,
+                           heatmap_weight_scale=SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE,
+                           focal_alpha=SAM_LORA_FOCAL_ALPHA,
+                           focal_gamma=SAM_LORA_FOCAL_GAMMA,
+                           skeletonize_iter=SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS,
+                           junction_patch_weight=SAM_LORA_JUNCTION_PATCH_WEIGHT,
+                           junction_loss_type=SAM_LORA_JUNCTION_LOSS_TYPE,
+                           topo_weight=SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT)
 
     trainable_params = get_trainable_params(sam_lora)
     for name, p in trainable_params:
@@ -377,20 +322,14 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         lr=SAM_LORA_LR,
     )
 
-    max_epochs = SAM_LORA_MAX_EPOCHS if not finetune_topoloss else LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS
-    scheduler = init_scheduler(optimizer, max_epochs, len(
-        trainloader), max_lr_scale=0.3 if finetune_topoloss else 1.0)
+    scheduler = init_scheduler(optimizer, SAM_LORA_MAX_EPOCHS, len(trainloader))
 
     min_validation_loss = float('inf')
     early_stopping = EarlyStopping(
-        patience=EARLY_STOPPING_PATIENCE, min_delta=EARLY_STOPPING_DELTA, min_epochs=EARLY_STOPPING_MIN_EPOCHS if not finetune_topoloss else 0)
+        patience=EARLY_STOPPING_PATIENCE, min_delta=EARLY_STOPPING_DELTA, min_epochs=EARLY_STOPPING_MIN_EPOCHS)
 
-    for epoch in range(max_epochs):
-        print(f"\nEpoch {epoch+1}/{max_epochs}")
-
-        use_topological_loss = finetune_topoloss or \
-            (topological_loss_start_epoch is not None and epoch >=
-             topological_loss_start_epoch)
+    for epoch in range(SAM_LORA_MAX_EPOCHS):
+        print(f"\nEpoch {epoch+1}/{SAM_LORA_MAX_EPOCHS}")
 
         # training
         sam_lora.train()
@@ -412,44 +351,36 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
             output_logits = torch.cat([d["low_res_logits"]
                                       for d in outputs], dim=0)
 
-            if not use_topological_loss:
-                loss, bce_total, bce_base, bce_heatmap_weighted, focal_loss_total, focal_loss_base, focal_loss_heatmap_weighted, \
-                    dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss = loss_fn(
-                        output_logits,
-                        target_masks,
-                        heatmap_weights if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
-                    )
+            loss, bce_total, bce_base, bce_heatmap_weighted, focal_loss_total, focal_loss_base, focal_loss_heatmap_weighted, \
+                dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss, topo_loss = loss_fn(
+                    output_logits,
+                    target_masks,
+                    heatmap_weights if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
+                )
 
-                total_training_loss += loss.item() * batch_size
-                total_loss_terms["BCE"] = total_loss_terms.get(
-                    "BCE", 0.0) + bce_total.item() * batch_size
-                total_loss_terms["BCE (base)"] = total_loss_terms.get(
-                    "BCE (base)", 0.0) + bce_base.item() * batch_size
-                total_loss_terms["BCE (heatmap weighted)"] = total_loss_terms.get(
-                    "BCE (heatmap weighted)", 0.0) + bce_heatmap_weighted.item() * batch_size
-                total_loss_terms["Focal"] = total_loss_terms.get(
-                    "Focal", 0.0) + focal_loss_total.item() * batch_size
-                total_loss_terms["Focal (base)"] = total_loss_terms.get(
-                    "Focal (base)", 0.0) + focal_loss_base.item() * batch_size
-                total_loss_terms["Focal (heatmap weighted)"] = total_loss_terms.get(
-                    "Focal (heatmap weighted)", 0.0) + focal_loss_heatmap_weighted.item() * batch_size
-                total_loss_terms["Dice"] = total_loss_terms.get(
-                    "Dice", 0.0) + dice_loss.item() * batch_size
-                total_loss_terms["ClDice"] = total_loss_terms.get(
-                    "ClDice", 0.0) + cl_dice_loss.item() * batch_size
-                total_loss_terms["Skeleton Recall"] = total_loss_terms.get(
-                    "Skeleton Recall", 0.0) + skeleton_recall_loss.item() * batch_size
-                total_loss_terms["Junction"] = total_loss_terms.get(
-                    "Junction", 0.0) + junction_loss.item() * batch_size
-            else:
-                loss, topo_loss, base_loss = topo_loss_fn(
-                    output_logits, target_masks)
-
-                total_training_loss += loss.item() * batch_size
-                total_loss_terms["Base"] = total_loss_terms.get(
-                    "Base", 0.0) + base_loss.item() * batch_size
-                total_loss_terms["Topological"] = total_loss_terms.get(
-                    "Topological", 0.0) + topo_loss.item() * batch_size
+            total_training_loss += loss.item() * batch_size
+            total_loss_terms["BCE"] = total_loss_terms.get(
+                "BCE", 0.0) + bce_total.item() * batch_size
+            total_loss_terms["BCE (base)"] = total_loss_terms.get(
+                "BCE (base)", 0.0) + bce_base.item() * batch_size
+            total_loss_terms["BCE (heatmap weighted)"] = total_loss_terms.get(
+                "BCE (heatmap weighted)", 0.0) + bce_heatmap_weighted.item() * batch_size
+            total_loss_terms["Focal"] = total_loss_terms.get(
+                "Focal", 0.0) + focal_loss_total.item() * batch_size
+            total_loss_terms["Focal (base)"] = total_loss_terms.get(
+                "Focal (base)", 0.0) + focal_loss_base.item() * batch_size
+            total_loss_terms["Focal (heatmap weighted)"] = total_loss_terms.get(
+                "Focal (heatmap weighted)", 0.0) + focal_loss_heatmap_weighted.item() * batch_size
+            total_loss_terms["Dice"] = total_loss_terms.get(
+                "Dice", 0.0) + dice_loss.item() * batch_size
+            total_loss_terms["ClDice"] = total_loss_terms.get(
+                "ClDice", 0.0) + cl_dice_loss.item() * batch_size
+            total_loss_terms["Skeleton Recall"] = total_loss_terms.get(
+                "Skeleton Recall", 0.0) + skeleton_recall_loss.item() * batch_size
+            total_loss_terms["Junction"] = total_loss_terms.get(
+                "Junction", 0.0) + junction_loss.item() * batch_size
+            total_loss_terms["Topological"] = total_loss_terms.get(
+                "Topological", 0.0) + topo_loss.item() * batch_size
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(sam_lora.parameters(), max_norm=1.0)
@@ -473,14 +404,11 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                                    multimask_output=SAM_LORA_NUM_CLASSES > 1)
                 output_logits = torch.cat([d["low_res_logits"]
                                           for d in outputs], dim=0)
-                if not use_topological_loss:
-                    loss, _, _, _, _, _, _, _, _, _, _ = loss_fn(
-                        output_logits,
-                        target_masks,
-                        heatmap_weights if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
-                    )
-                else:
-                    loss, _, _ = topo_loss_fn(output_logits, target_masks)
+                loss, _, _, _, _, _, _, _, _, _, _, _ = loss_fn(
+                    output_logits,
+                    target_masks,
+                    heatmap_weights if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
+                )
 
                 total_validation_loss += loss.item() * len(batched_input)
 
@@ -514,21 +442,6 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
 
         # early stopping
         if early_stopping(mean_validation_loss, epoch):
-            if not use_topological_loss and topological_loss_start_epoch is not None:
-                print(
-                    f"  topological loss training phase hasn't yet started. Reset early stop and start topological loss training")
-                early_stopping.reset()
-                reset_lr(optimizer, max_lr_scale=0.3)
-                scheduler = init_scheduler(
-                    optimizer, LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS, len(trainloader), max_lr_scale=0.3)
-                topological_loss_start_epoch = epoch + 1
-            else:
-                break
-
-        # max epoch for topological loss
-        if use_topological_loss and LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS is not None \
-                and epoch == topological_loss_start_epoch + LOSS_TOPOLOGICAL_LOSS_MAX_EPOCHS:
-            print(f"Maximum epochs for topological loss reached")
             break
 
     save_params(sam_lora, wandb_run, "final")
@@ -563,12 +476,6 @@ def train_evaluate():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     sam_lora = init_model(device)
-    if SAM_LORA_TOPOLOGICAL_LOSS_FINETUNING_CHECKPOINT is not None:
-        print(
-            f"Initializing model parameters from checkpoint for topological loss fine-tuning: {str(SAM_LORA_TOPOLOGICAL_LOSS_FINETUNING_CHECKPOINT)}")
-        sam_lora = init_model_params_from_artifact(
-            sam_lora=sam_lora, device=device, checkpoint=SAM_LORA_TOPOLOGICAL_LOSS_FINETUNING_CHECKPOINT)
-
     trainloader, validationloader, train_size, val_size = init_data_loaders()
 
     wandb_run = None
