@@ -26,7 +26,8 @@ def main():
 
         run_id_file = run_dir / "wandb_run_id.txt"
         if not run_id_file.exists():
-            print("    no wandb_run_id.txt, skipping")
+            print("    no wandb_run_id.txt, skipping and deleting directory")
+            run_dir.rmdir()
             continue
 
         run_id = run_id_file.read_text().strip()
@@ -34,7 +35,14 @@ def main():
         try:
             api_run = api.run(f"{WANDB_ENTITY}/{WANDB_PROJECT}/{run_id}")
         except Exception as e:
-            print(f"    could not find run {run_id} via API: {e}, skipping")
+            print(
+                f"    could not find run {run_id} via API: {e}, skipping and deleting directory")
+            run_dir.rmdir()
+            continue
+
+        if api_run.state.lower() != "finished":
+            print(
+                f"    Run {run_id} is not finished (state: {api_run.state}), skipping")
             continue
 
         existing_artifacts = [a.name.replace(":v0", "")
