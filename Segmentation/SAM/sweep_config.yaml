@@ -1,0 +1,21 @@
+# Hyperparameter sweep configuration
+#
+# Two modes are supported:
+#
+# 1. Grid search: Define parameter lists under "grid". All combinations will be generated.
+#    grid:
+#      SAM_LORA_LR: [0.001, 0.0005]
+#      SAM_LORA_RANK: [4, 8]
+#    This produces 4 runs: (0.001, 4), (0.001, 8), (0.0005, 4), (0.0005, 8)
+#
+# 2. Explicit runs: Define each run's overrides under "runs".
+#    runs:
+#      - SAM_LORA_LR: 0.001
+#        SAM_LORA_RANK: 4
+#      - SAM_LORA_LR: 0.0005
+#        SAM_LORA_RANK: 8
+#
+# If both "grid" and "runs" are specified, "runs" takes precedence.
+# Any parameter not listed here uses the default from .env.
+
+runs:

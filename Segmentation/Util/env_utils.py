@@ -15,7 +15,7 @@ def load_segmentation_env():
     repo_root = find_repo_root()
     env_path = repo_root / "Segmentation" / ".env"
     if env_path.exists():
-        load_dotenv(dotenv_path=env_path, override=True)
+        load_dotenv(dotenv_path=env_path, override=False)
         print(f"loaded environment variables from: {env_path}")
     else:
         print(f".env file not found: {env_path} — using defaults")

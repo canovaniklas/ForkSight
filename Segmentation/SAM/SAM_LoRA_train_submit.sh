@@ -20,6 +20,11 @@ set -a
 source ./Segmentation/.env
 set +a
 
+# apply any env var overrides passed as arguments (e.g. SAM_LORA_LR=0.0001)
+for arg in "$@"; do
+    export "$arg"
+done
+
 # create directories for wandb and logs
 BASE_DIR="/scratch/jhehli"
 export WANDB_DIR="${BASE_DIR}/wandb"
