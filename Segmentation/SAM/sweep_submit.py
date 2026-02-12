@@ -37,7 +37,8 @@ def build_runs(config: dict) -> list[dict[str, str]]:
     if "grid" in config:
         grid = config["grid"]
         keys = list(grid.keys())
-        values = [grid[k] if isinstance(grid[k], list) else [grid[k]] for k in keys]
+        values = [grid[k] if isinstance(grid[k], list) else [
+            grid[k]] for k in keys]
         return [dict(zip(keys, combo)) for combo in itertools.product(*values)]
 
     print("Error: config must contain either 'grid' or 'runs'.")
@@ -48,6 +49,8 @@ def run_label(params: dict) -> str:
     """Short human-readable label for a parameter combination."""
     parts = []
     for k, v in params.items():
+        if (type(v) == int or type(v) == float) and v == 0:
+            continue  # skip zero values for brevity
         short_key = k.replace("SAM_LORA_", "").replace("LOSS_", "")
         parts.append(f"{short_key}={v}")
     return "_".join(parts)
@@ -81,9 +84,12 @@ def submit(params: dict, dry_run: bool = False) -> str | None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Submit a SLURM hyperparameter sweep.")
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to sweep YAML config")
-    parser.add_argument("--dry-run", action="store_true", help="Print sbatch commands without submitting")
+    parser = argparse.ArgumentParser(
+        description="Submit a SLURM hyperparameter sweep.")
+    parser.add_argument("--config", type=Path,
+                        default=DEFAULT_CONFIG, help="Path to sweep YAML config")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Print sbatch commands without submitting")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -92,7 +98,7 @@ def main():
     print(f"Sweep: {len(runs)} run(s) from {args.config.name}\n")
     for i, params in enumerate(runs, 1):
         print(f"Run {i}/{len(runs)}: {run_label(params)}")
-
+    
     print()
     job_ids = []
     for params in runs:
