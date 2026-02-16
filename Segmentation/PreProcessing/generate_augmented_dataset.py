@@ -318,9 +318,6 @@ def create_patches_and_save():
                         f"{npy_file.stem}_patch_{i:02d}.npy", patch)
 
 
-from scipy.ndimage import label, center_of_mass
-
-
 def find_junction_centers(heatmap: np.ndarray, threshold: float = 0.95) -> list[tuple[int, int]]:
     """Find junction centers as local maxima in the heatmap.
     Returns list of (x, y) integer coordinates."""
@@ -336,24 +333,25 @@ def oversample_junction_patches():
     """For each junction point in each augmented training image, create one random
     1024x1024 patch that contains the junction at a random (non-centered) position.
     Saves image, mask, and heatmap patches alongside the grid patches."""
-    base_dir = Path(DATASETS_DIR) / DATASET_NAME / "train"
+    train_dir = Path(DATASETS_DIR) / DATASET_NAME / "train"
 
-    highres_images_dir = base_dir / HIGHRES_IMG_DIR_NAME
-    highres_masks_dir = base_dir / HIGHRES_MASK_DIR_NAME
-    highres_heatmaps_dir = base_dir / HIGHRES_HEATMAP_DIR_NAME
+    highres_images_dir = train_dir / HIGHRES_IMG_DIR_NAME
+    highres_masks_dir = train_dir / HIGHRES_MASK_DIR_NAME
+    highres_heatmaps_dir = train_dir / HIGHRES_HEATMAP_DIR_NAME
 
-    img_patches_dir = base_dir / HIGHRES_IMG_PATCHES_DIR_NAME
-    mask_patches_dir = base_dir / HIGHRES_MASK_PATCHES_DIR_NAME
-    heatmap_patches_dir = base_dir / HIGHRES_HEATMAP_PATCHES_DIR_NAME
+    img_patches_dir = train_dir / HIGHRES_IMG_PATCHES_DIR_NAME
+    mask_patches_dir = train_dir / HIGHRES_MASK_PATCHES_DIR_NAME
+    heatmap_patches_dir = train_dir / HIGHRES_HEATMAP_PATCHES_DIR_NAME
 
     patch_size = 1024
     total_patches = 0
 
     for npy_file in sorted(highres_heatmaps_dir.glob("*.npy")):
         stem = npy_file.stem
-        if stem.endswith("_soi"):
-            # skip SoI images, because they're already 1024x1024
-            continue
+
+        # if stem.endswith("_soi"):
+        #    # skip SoI images, because they're already 1024x1024
+        #    continue
 
         img_path = highres_images_dir / f"{stem}.png"
         mask_path = highres_masks_dir / f"{stem}.png"
