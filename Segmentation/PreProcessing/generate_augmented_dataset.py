@@ -9,6 +9,7 @@ from PIL import Image
 import torch
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
+from scipy.ndimage import label, center_of_mass
 
 from Segmentation.Util.env_utils import load_as, load_as_tuple, load_segmentation_env
 from Segmentation.Util.dataset_util import create_patches_from_img
@@ -42,8 +43,8 @@ DATASET_GAMMA_RANGE = load_as_tuple("DATASET_GAMMA_RANGE", "0.6,1.4", float)
 DATASET_MAX_DISTORT = load_as("DATASET_MAX_DISTORT", float, "0.1")
 DATASET_DISTORT_GRID_SIZE = load_as_tuple(
     "DATASET_DISTORT_GRID_SIZE", "4,4", int)
-DATASET_RANDOM_CROP_SIZE = load_as_tuple(
-    "DATASET_RANDOM_CROP_SIZE", "2048,2048", int)
+DATASET_OVERSAMPLE_JUNCTION_PATCHES = load_as(
+    "DATASET_OVERSAMPLE_JUNCTION_PATCHES", int, 0)
 
 DATASET_SAVE_HEATMAP_VISUALIZATIONS = load_as(
     "DATASET_SAVE_HEATMAP_VISUALIZATIONS", bool, False)
@@ -107,19 +108,6 @@ def grid_distort(*tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
                                               padding_mode="border", align_corners=True)
         results.append(out.squeeze(0).clamp(0.0, 1.0))
     return tuple(results)
-
-
-def random_crop_pair(img: torch.Tensor, mask: torch.Tensor):
-    _, H, W = img.shape
-
-    top = torch.randint(0, H - DATASET_RANDOM_CROP_SIZE[0] + 1, (1,)).item()
-    left = torch.randint(0, W - DATASET_RANDOM_CROP_SIZE[1] + 1, (1,)).item()
-
-    cropped_img = img[..., top:top + DATASET_RANDOM_CROP_SIZE[0],
-                      left:left + DATASET_RANDOM_CROP_SIZE[1]]
-    cropped_mask = mask[..., top:top + DATASET_RANDOM_CROP_SIZE[0],
-                        left:left + DATASET_RANDOM_CROP_SIZE[1]]
-    return (cropped_img, cropped_mask)
 
 
 def save_tensor_as_png(tensor_img: torch.Tensor, tensor_mask: torch.Tensor, png_path: Path, out_dir_img: Path, out_dir_mask: Path, aug_name: str):
@@ -330,6 +318,97 @@ def create_patches_and_save():
                         f"{npy_file.stem}_patch_{i:02d}.npy", patch)
 
 
+from scipy.ndimage import label, center_of_mass
+
+
+def find_junction_centers(heatmap: np.ndarray, threshold: float = 0.95) -> list[tuple[int, int]]:
+    """Find junction centers as local maxima in the heatmap.
+    Returns list of (x, y) integer coordinates."""
+    binary = heatmap >= threshold
+    labeled, num_features = label(binary)
+    if num_features == 0:
+        return []
+    centers = center_of_mass(heatmap, labeled, range(1, num_features + 1))
+    return [(int(round(x)), int(round(y))) for y, x in centers]
+
+
+def oversample_junction_patches():
+    """For each junction point in each augmented training image, create one random
+    1024x1024 patch that contains the junction at a random (non-centered) position.
+    Saves image, mask, and heatmap patches alongside the grid patches."""
+    base_dir = Path(DATASETS_DIR) / DATASET_NAME / "train"
+
+    highres_images_dir = base_dir / HIGHRES_IMG_DIR_NAME
+    highres_masks_dir = base_dir / HIGHRES_MASK_DIR_NAME
+    highres_heatmaps_dir = base_dir / HIGHRES_HEATMAP_DIR_NAME
+
+    img_patches_dir = base_dir / HIGHRES_IMG_PATCHES_DIR_NAME
+    mask_patches_dir = base_dir / HIGHRES_MASK_PATCHES_DIR_NAME
+    heatmap_patches_dir = base_dir / HIGHRES_HEATMAP_PATCHES_DIR_NAME
+
+    patch_size = 1024
+    total_patches = 0
+
+    for npy_file in sorted(highres_heatmaps_dir.glob("*.npy")):
+        stem = npy_file.stem
+        if stem.endswith("_soi"):
+            # skip SoI images, because they're already 1024x1024
+            continue
+
+        img_path = highres_images_dir / f"{stem}.png"
+        mask_path = highres_masks_dir / f"{stem}.png"
+
+        heatmap = np.load(npy_file).astype(np.float32)
+        centers = find_junction_centers(heatmap)
+        if not centers:
+            continue
+
+        img_tensor = load_png_as_tensor(img_path)
+        mask_tensor = load_png_as_tensor(mask_path)
+        hm_tensor = torch.from_numpy(heatmap).unsqueeze(0)
+
+        _, H, W = img_tensor.shape
+        if H < patch_size or W < patch_size:
+            print(
+                f"Skipping {stem}: image too small for {patch_size}x{patch_size} patches")
+            continue
+
+        for j, (cx, cy) in enumerate(centers):
+            min_left = max(0, cx - patch_size + 1)
+            max_left = min(W - patch_size, cx)
+            min_top = max(0, cy - patch_size + 1)
+            max_top = min(H - patch_size, cy)
+
+            if min_left > max_left or min_top > max_top:
+                continue
+
+            for k in range(DATASET_OVERSAMPLE_JUNCTION_PATCHES):
+                left = random.randint(min_left, max_left)
+                top = random.randint(min_top, max_top)
+
+                img_patch = img_tensor[:, top:top +
+                                       patch_size, left:left + patch_size]
+                mask_patch = mask_tensor[:, top:top +
+                                         patch_size, left:left + patch_size]
+                hm_patch = hm_tensor[:, top:top +
+                                     patch_size, left:left + patch_size]
+
+                patch_name = f"{stem}_junctionpatch_{j:02d}_{k:02d}"
+
+                F.to_pil_image(img_patch).save(
+                    img_patches_dir / f"{patch_name}.png")
+                F.to_pil_image(mask_patch).save(
+                    mask_patches_dir / f"{patch_name}.png")
+                np.save(heatmap_patches_dir / f"{patch_name}.npy",
+                        hm_patch.squeeze(0).numpy())
+
+                total_patches += 1
+
+        print(f"Created {len(centers)} junction patches for {stem}.png")
+
+    print(f"\nTotal junction oversampling patches created: {total_patches}")
+
+
 def remove_highres_dirs():
     base_dirs = [
         Path(DATASETS_DIR) / DATASET_NAME / "train",
@@ -347,6 +426,8 @@ def main():
     set_seeds()
     augment_and_save()
     create_patches_and_save()
+    if DATASET_OVERSAMPLE_JUNCTION_PATCHES > 0:
+        oversample_junction_patches()
     remove_highres_dirs()
 
 
