@@ -39,6 +39,11 @@ def main():
                 out_img = Image.fromarray(
                     binary_mask * 255 if CVAT_GENERATE_BW_MASKS else binary_mask.astype(np.uint8))
 
+                if not png_path.stem.endswith("_soi"):
+                    # ensure all full images are same size (some are 4000x400)
+                    out_img = out_img.resize(
+                        (4096, 4096), resample=Image.Resampling.NEAREST)
+
                 out_img.save(output_dir / png_path.name)
 
                 print(

@@ -169,17 +169,12 @@ def load_dataset_split() -> dict[str, list[str]]:
 def get_train_test_split_image_paths(raw_images_dir: Path) -> tuple[list[str], list[str]]:
     splits = load_dataset_split()
 
-    if splits is not None:
-        train_image_paths = [str(raw_images_dir / img_name)
-                             for img_name in splits["train"]]
-        test_image_paths = [str(raw_images_dir / img_name)
-                            for img_name in splits["test"]]
-    else:
-        img_paths = sorted([str(p) for p in raw_images_dir.rglob("*.png")])
-        random.shuffle(img_paths)
-        split_idx = int(0.8 * len(img_paths))
-        train_image_paths = img_paths[:split_idx]
-        test_image_paths = img_paths[split_idx:]
+    assert splits is not None, f"dataset_splits.json file doesn't contain split for dataset {DATASET_NAME}"
+
+    train_image_paths = [str(raw_images_dir / img_name)
+                         for img_name in splits["train"]]
+    test_image_paths = [str(raw_images_dir / img_name)
+                        for img_name in splits["test"]]
 
     return train_image_paths, test_image_paths
 

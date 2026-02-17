@@ -123,6 +123,8 @@ def main():
     out_dir_path = Path(RAW_DATA_DIR) / HIGHRES_IMG_DIR_NAME
     init_folder(out_dir_path)
 
+    total_images = 0
+
     for img_path_str, soi_coords in IN_IMAGES:
         img_path = Path(img_path_str)
         try:
@@ -130,15 +132,19 @@ def main():
             img = normalize_convert_uint8(
                 img=img, soi_coords=soi_coords, patch_size=1024)
 
+            is_soi_img = soi_coords is not None
             new_name = get_new_name(
-                img_path, "soi" if soi_coords is not None else None)
-            save_image_as_png(img, out_dir_path, new_name)
+                img_path, "soi" if is_soi_img else None)
+            save_image_as_png(img, out_dir_path, new_name, resize=(
+                4096, 4096) if not is_soi_img else None)  # ensure all full images are same size (some are 4000x400)
 
             print(f"{new_name}")
+            total_images += 1
 
         except Exception as e:
             print(f"Failed to convert {img_path}: {e}")
 
+    print(f"Created {total_images} PNG images")
 
 if __name__ == "__main__":
     main()
