@@ -153,8 +153,8 @@ def seed_everything(seed: int):
 
 
 def get_init_run_out_dir(wandb_run):
-    run_dirname = wandb_run.name.lower(
-    ) if wandb_run is not None else f"sam_lora_finetuning_{RUN_DATETIME_STR}"
+    run_dirname = f"{wandb_run.name.lower()}_{wandb_run.id}" \
+        if wandb_run is not None else f"sam_lora_finetuning_{RUN_DATETIME_STR}"
 
     run_out_dir = Path(MODEL_OUT_DIR) / run_dirname
     run_out_dir.mkdir(parents=True, exist_ok=True)
@@ -321,7 +321,8 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         lr=SAM_LORA_LR,
     )
 
-    scheduler = init_scheduler(optimizer, SAM_LORA_MAX_EPOCHS, len(trainloader))
+    scheduler = init_scheduler(
+        optimizer, SAM_LORA_MAX_EPOCHS, len(trainloader))
 
     min_validation_loss = float('inf')
     early_stopping = EarlyStopping(

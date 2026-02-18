@@ -32,7 +32,8 @@ def remove_small_objects_from_batch(masks: torch.Tensor) -> torch.Tensor:
     :return: Tensor of same shape, with small connected components removed
     """
 
-    assert masks.ndim == 4 and masks.shape[1] == 1, f"Expected mask shape (B, 1, H, W), got {masks.shape}"
+    assert masks.ndim == 4 and masks.shape[
+        1] == 1, f"Expected mask shape (B, 1, H, W), got {masks.shape}"
 
     B = masks.shape[0]
     output = torch.zeros_like(masks)
@@ -62,9 +63,10 @@ def stitch_mask_tiles(masks: torch.Tensor, grid_size: tuple[int, int], original_
     :return: Tensor of shape (1, H*grid_rows, W*grid_cols)
     """
 
-    assert masks.ndim == 4 and masks.shape[1] == 1, "Expected mask shape (B, 1, H, W)"
+    assert masks.ndim == 4 and masks.shape[
+        1] == 1, f"Expected mask shape (B, 1, H, W), got {masks.shape}"
     assert masks.shape[0] == grid_size[0] * \
-        grid_size[1], "Number of masks does not match grid size"
+        grid_size[1], f"Number of masks does not match grid size, got {masks.shape[0]}"
 
     masks = F.interpolate(
         masks.float(),
@@ -93,7 +95,7 @@ def extract_mask_elements_bboxes(mask: torch.Tensor) -> list[tuple[int, int, int
     boxes = []
     for component_idx in range(1, num_components + 1):
         ys, xs = np.where(labeled_mask == component_idx)
-        
+
         x1 = int(xs.min())
         y1 = int(ys.min())
         x2 = int(xs.max())
