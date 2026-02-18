@@ -101,9 +101,14 @@ def visualize_heatmap_overlay(
 ):
     image = Image.open(image_path).convert('RGB')
     mask = Image.open(mask_path)
+    print(f"Visualizing heatmap overlay for: {image_path.name}")
+    print(
+        f"  Image size: {image.size}, Mask size: {mask.size}, Heatmap shape: {heatmap.shape}")
 
     image_np = np.array(image)
     mask_np = np.array(mask)
+    print(
+        f"  Image array shape: {image_np.shape}, Mask array shape: {mask_np.shape}")
 
     _, ax = plt.subplots(1, 1, figsize=(12, 12))
 
@@ -137,15 +142,17 @@ def process_images():
     image_files = sorted(IMAGE_DIR.glob('*.png'))
     print(f"Found {len(image_files)} images in directory")
 
-    for image_path in image_files:
+    for idx, image_path in enumerate(image_files):
         image_name = image_path.name
-        print(f"\nProcessing: {image_name}")
 
         points = points_per_image.get(image_name, [])
         print(f"  Points: {len(points)}")
 
         with Image.open(image_path) as img:
             width, height = img.size
+
+        print(
+            f"\nProcessing {idx}/{len(image_files)}: {image_name} with dimencions (width={width}, height={height})")
 
         if len(points) > 0:
             heatmap = create_gaussian_heatmap(
@@ -154,12 +161,15 @@ def process_images():
             # Create zero heatmap if no points annotations found
             heatmap = np.zeros((height, width), dtype=np.float32)
 
+        print(f"heatmap shape: {heatmap.shape}, dtype: {heatmap.dtype}")
         num_nonzero_pixels = np.sum(heatmap > 0)
         print(f"  Heatmap non-zero pixels: {num_nonzero_pixels}")
         px_mean = heatmap.mean()
         print(f"  Heatmap mean value: {px_mean:.6f}")
-        px_over_zero_mean = heatmap[heatmap > 0].mean() if num_nonzero_pixels > 0 else 0.0
-        print(f"  Heatmap mean value (non-zero pixels): {px_over_zero_mean:.6f}")
+        px_over_zero_mean = heatmap[heatmap > 0].mean(
+        ) if num_nonzero_pixels > 0 else 0.0
+        print(
+            f"  Heatmap mean value (non-zero pixels): {px_over_zero_mean:.6f}")
         heatmap_max = heatmap.max()
         print(f"  Heatmap max value: {heatmap_max:.6f}")
         num_max_pixels = np.sum(heatmap == heatmap_max)
