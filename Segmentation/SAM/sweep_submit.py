@@ -60,7 +60,7 @@ def submit(params: dict, dry_run: bool = False) -> str | None:
     """Submit a single SLURM job with the given parameter overrides."""
     args = [f"{k}={v}" for k, v in params.items()]
     label = run_label(params)
-    job_name = f"sweep_{label}"
+    job_name = f" SAM-LoRA-train"  # sweep_{label}"
 
     cmd = [
         "sbatch",
@@ -98,7 +98,7 @@ def main():
     print(f"Sweep: {len(runs)} run(s) from {args.config.name}\n")
     for i, params in enumerate(runs, 1):
         print(f"Run {i}/{len(runs)}: {run_label(params)}")
-    
+
     print()
     job_ids = []
     for params in runs:
