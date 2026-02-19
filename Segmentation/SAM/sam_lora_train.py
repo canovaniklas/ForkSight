@@ -206,6 +206,7 @@ def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: i
             "junction_patch_weight": SAM_LORA_JUNCTION_PATCH_WEIGHT,
             "junction_loss_type": SAM_LORA_JUNCTION_LOSS_TYPE,
             "topological_loss_weight": SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT,
+            "dataset_downsample_size": DATASET_DOWNSAMPLE_SIZE,
         },
     )
 
