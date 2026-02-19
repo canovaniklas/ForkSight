@@ -25,23 +25,28 @@ EVALUATED_TAG = "test-evaluated"
 
 
 class SegmentationDataset(Dataset):
-    def __init__(self, images_dir: Path, masks_dir: Path, heatmaps_dir: Path | None = None):
+    def __init__(self, images_dir: Path, masks_dir: Path, heatmaps_dir: Path | None = None, downsample_size: tuple[int, int] = None):
         self.image_paths = list(images_dir.glob("*.png"))
         self.masks_dir = masks_dir
         self.heatmaps_dir = heatmaps_dir
+        self.downsample_size = downsample_size
 
     def _load_image(self, path: Path, is_mask: bool = False) -> torch.Tensor:
-        transform = transforms.Compose([
-            # resize to 1024x1024 size because a) there are random crops of different sizes, b) SAM model was trained on 1024x1024 images and performs best at that size
-            # using nearest neighbor interpolation for masks to preserve label values (no interpolation)
+        transform_steps = []
+
+        if self.downsample_size is not None:
+            transform_steps.append(transforms.Resize(self.downsample_size, interpolation=(
+                transforms.InterpolationMode.NEAREST if is_mask else transforms.InterpolationMode.BILINEAR)))
+
+        transform_steps += [
             transforms.Resize((1024, 1024), interpolation=(
                 transforms.InterpolationMode.NEAREST if is_mask else transforms.InterpolationMode.BILINEAR)),
-            transforms.ToTensor()
-        ])
+            transforms.ToTensor(),
+            transforms.Lambda(lambda t: t.repeat(3, 1, 1)
+                              if t.shape[0] == 1 and not is_mask else t)
+        ]
 
-        if not is_mask:
-            transform.transforms.append(transforms.Lambda(
-                lambda t: t.repeat(3, 1, 1) if t.shape[0] == 1 else t))
+        transform = transforms.Compose(transform_steps)
 
         img = Image.open(path)
         return transform(img)

@@ -12,7 +12,7 @@ import wandb
 
 from Segmentation.SAM.sam_lora import SamLoRA
 from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, SegmentationDataset, evaluate_model, get_batched_input_list
-from Segmentation.Util.env_utils import load_as, load_as_bool, load_segmentation_env
+from Segmentation.Util.env_utils import load_as, load_as_bool, load_as_tuple, load_segmentation_env
 from Segmentation.Util.dataset_util import get_base_images
 
 load_segmentation_env()
@@ -75,6 +75,7 @@ SAM_LORA_JUNCTION_PATCH_WEIGHT = load_as(
 SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT = load_as(
     "SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT", float, 0.0)
 
+DATASET_DOWNSAMPLE_SIZE = load_as_tuple("DATASET_DOWNSAMPLE_SIZE", None, int)
 
 EARLY_STOPPING_PATIENCE = load_as("EARLY_STOPPING_PATIENCE", int, 15)
 EARLY_STOPPING_DELTA = load_as("EARLY_STOPPING_DELTA", float, 0.005)
@@ -255,7 +256,7 @@ def save_params(sam_lora: SamLoRA, wandb_run, suffix: str = None):
 
 def init_data_loaders():
     dataset = SegmentationDataset(
-        images_dir=TRAIN_IMAGES_DIR, masks_dir=TRAIN_MASKS_DIR, heatmaps_dir=TRAIN_HEATMAPS_DIR)
+        images_dir=TRAIN_IMAGES_DIR, masks_dir=TRAIN_MASKS_DIR, heatmaps_dir=TRAIN_HEATMAPS_DIR, downsample_size=DATASET_DOWNSAMPLE_SIZE)
 
     indices = list(range(len(dataset)))
     np.random.shuffle(indices)
