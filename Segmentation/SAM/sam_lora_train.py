@@ -11,7 +11,7 @@ from pathlib import Path
 import wandb
 
 from Segmentation.SAM.sam_lora import SamLoRA
-from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, SegmentationDataset, evaluate_model, get_batched_input_list
+from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, SegmentationDataset, evaluate_model, get_batched_input_list, hard_dice_score, hard_clDice
 from Segmentation.Util.env_utils import load_as, load_as_bool, load_as_tuple, load_segmentation_env
 from Segmentation.Util.dataset_util import get_base_images
 
@@ -82,6 +82,11 @@ DATASET_DOWNSAMPLE_SIZE = (
 EARLY_STOPPING_PATIENCE = load_as("EARLY_STOPPING_PATIENCE", int, 15)
 EARLY_STOPPING_DELTA = load_as("EARLY_STOPPING_DELTA", float, 0.005)
 EARLY_STOPPING_MIN_EPOCHS = load_as("EARLY_STOPPING_MIN_EPOCHS", int, 50)
+
+VALIDATION_METRIC_CLDICE_ALPHA = load_as(
+    "VALIDATION_METRIC_CLDICE_ALPHA", float, 0.75)
+VALIDATION_METRIC_DICE_BETA = load_as(
+    "VALIDATION_METRIC_DICE_BETA", float, 0.25)
 
 if MODEL_CHECKPOINTS_DIR is None or DATASETS_DIR is None or MODEL_OUT_DIR is None:
     raise ValueError(
@@ -396,6 +401,8 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         # validation
         sam_lora.eval()
         total_validation_loss = 0.0
+        val_hard_dice_scores = []
+        val_hard_cldice_scores = []
 
         with torch.no_grad():
             for batched_input, target_masks, heatmap_weights in validationloader:
@@ -416,6 +423,15 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
 
                 total_validation_loss += loss.item() * len(batched_input)
 
+                for pred, target in zip(outputs, target_masks.unbind(0)):
+                    pred_mask = pred["masks"].squeeze(0)
+                    val_hard_dice_scores.append(
+                        hard_dice_score(pred_mask, target).item())
+                    pred_np = pred_mask.squeeze(0).cpu().numpy()
+                    target_np = target.squeeze(0).cpu().numpy()
+                    cldice, _, _ = hard_clDice(pred_np, target_np)
+                    val_hard_cldice_scores.append(cldice)
+
         # epoch metrics
         num_training_samples = len(trainloader) * trainloader.batch_size
         mean_training_loss = total_training_loss / num_training_samples
@@ -428,8 +444,20 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         num_validation_samples = len(
             validationloader) * validationloader.batch_size
         mean_validation_loss = total_validation_loss / num_validation_samples
+        
+        mean_val_hard_dice = sum(val_hard_dice_scores) / \
+            len(val_hard_dice_scores)
+        mean_val_hard_cldice = sum(
+            val_hard_cldice_scores) / len(val_hard_cldice_scores)
+        val_composite_metric = (
+            VALIDATION_METRIC_CLDICE_ALPHA * mean_val_hard_cldice
+            + VALIDATION_METRIC_DICE_BETA * mean_val_hard_dice
+        )
 
         print(f"    Validation Loss: {mean_validation_loss:.4f}")
+        print(f"    Validation Hard Dice: {mean_val_hard_dice:.4f}")
+        print(f"    Validation Hard clDice: {mean_val_hard_cldice:.4f}")
+        print(f"    Validation Composite Metric: {val_composite_metric:.4f}")
         print(f"    Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
 
         if mean_validation_loss < min_validation_loss:
@@ -441,6 +469,9 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
             wandb_run.log({
                 "train/loss": mean_training_loss,
                 "validation/loss": mean_validation_loss,
+                "validation/hard_dice": mean_val_hard_dice,
+                "validation/hard_cldice": mean_val_hard_cldice,
+                "validation/composite_metric": val_composite_metric,
                 "learning_rate": scheduler.get_last_lr()[0],
             })
 
