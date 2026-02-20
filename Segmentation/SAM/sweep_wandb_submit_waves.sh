@@ -42,10 +42,10 @@ for wave in $(seq 2 $(( NUM_LATER_WAVES + 1 ))); do
         --array=1-"${LATER_WAVE_SIZE}" \
         --job-name="wandb-w${wave}-${SWEEP_ID}" \
         --export=ALL,SWEEP_PATH="${SWEEP_PATH}" \
-        --dependency=afterall:"${PREV_JOB}" \
+        --dependency=afterany:"${PREV_JOB}" \
         Segmentation/SAM/sweep_wandb_agent_job.sh)
 
-    echo "Wave ${wave}: job ${PREV_JOB} — ${LATER_WAVE_SIZE} parallel trials (waits for previous wave)"
+    echo "Wave ${wave}: job ${PREV_JOB} — ${LATER_WAVE_SIZE} parallel trials (waits for job ${PREV_JOB%_*})"
 done
 
 echo ""
