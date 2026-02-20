@@ -149,11 +149,22 @@ def main():
     print("=" * 65)
     print(f"\n  clDice:           {path_cldice}")
     print(f"  Skeleton Recall:  {path_skel}")
-    print("\nTo submit N SLURM jobs per sweep (run from repo root):")
+
+    print("\nTo submit N SLURM jobs per sweep that MAY RUN IN PARALLEL (run from repo root):")
     print(
-        f"\n  bash Segmentation/SAM/sweep_wandb_submit_slurm.sh {path_cldice} <n_trials>")
+        f"bash Segmentation/SAM/sweep_wandb_submit_slurm.sh {path_cldice} <n_trials>")
     print(
         f"  bash Segmentation/SAM/sweep_wandb_submit_slurm.sh {path_skel} <n_trials>")
+
+    print("\nTo submit SLURM jobs in WAVES (for better exploitation) (run from repo root):")
+    print(
+        f"bash Segmentation/SAM/sweep_wandb_submit_waves.sh {path_cldice} <wave1_size> <later_wave_size> <num_later_waves>")
+    print(
+        f"  bash Segmentation/SAM/sweep_wandb_submit_waves.sh {path_skel} <wave1_size> <later_wave_size> <num_later_waves>")
+    print("     <wave1_size>: number of parallel trials in the first wave")
+    print("     <later_wave_size>: number of parallel trials in each subsequent wave")
+    print("     <num_later_waves>: number of subsequent waves (after the first wave)")
+
     print(
         f"\nMonitor at: https://wandb.ai/{WANDB_ENTITY}/{WANDB_PROJECT}/sweeps\n")
 
