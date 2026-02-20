@@ -11,7 +11,7 @@ from pathlib import Path
 import wandb
 
 from Segmentation.SAM.sam_lora import SamLoRA
-from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, SegmentationDataset, evaluate_model, get_batched_input_list, hard_dice_score, hard_clDice
+from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, SegmentationDataset, evaluate_model, get_batched_input_list, hard_clDice, hard_dice_score
 from Segmentation.Util.env_utils import load_as, load_as_bool, load_as_tuple, load_segmentation_env
 from Segmentation.Util.dataset_util import get_base_images
 
@@ -75,18 +75,13 @@ SAM_LORA_JUNCTION_PATCH_WEIGHT = load_as(
 SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT = load_as(
     "SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT", float, 0.0)
 
-DATASET_DOWNSAMPLE_SIZE = load_as("DATASET_DOWNSAMPLE_SIZE", int, None)
+_raw_downsample = load_as("DATASET_DOWNSAMPLE_SIZE", int, None)
 DATASET_DOWNSAMPLE_SIZE = (
-    DATASET_DOWNSAMPLE_SIZE, DATASET_DOWNSAMPLE_SIZE) if DATASET_DOWNSAMPLE_SIZE is not None else None
+    _raw_downsample, _raw_downsample) if _raw_downsample is not None else None
 
 EARLY_STOPPING_PATIENCE = load_as("EARLY_STOPPING_PATIENCE", int, 15)
 EARLY_STOPPING_DELTA = load_as("EARLY_STOPPING_DELTA", float, 0.005)
 EARLY_STOPPING_MIN_EPOCHS = load_as("EARLY_STOPPING_MIN_EPOCHS", int, 50)
-
-VALIDATION_METRIC_CLDICE_ALPHA = load_as(
-    "VALIDATION_METRIC_CLDICE_ALPHA", float, 0.75)
-VALIDATION_METRIC_DICE_BETA = load_as(
-    "VALIDATION_METRIC_DICE_BETA", float, 0.25)
 
 if MODEL_CHECKPOINTS_DIR is None or DATASETS_DIR is None or MODEL_OUT_DIR is None:
     raise ValueError(
@@ -107,9 +102,6 @@ TRAIN_IMAGES_DIR = train_dir / HIGHRES_IMG_PATCHES_DIR_NAME
 TRAIN_MASKS_DIR = train_dir / HIGHRES_MASK_PATCHES_DIR_NAME
 TEST_IMAGES_DIR = test_dir / HIGHRES_IMG_PATCHES_DIR_NAME
 TEST_MASKS_DIR = test_dir / HIGHRES_MASK_PATCHES_DIR_NAME
-TRAIN_HEATMAPS_DIR = train_dir / \
-    HIGHRES_HEATMAP_PATCHES_DIR_NAME if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
-
 
 RUN_DATETIME_STR = datetime.now(
     ZoneInfo("Europe/Zurich")).strftime("%Y%m%d_%H%M%S")
@@ -170,60 +162,6 @@ def get_init_run_out_dir(wandb_run):
     return run_out_dir
 
 
-def init_wandb_run(trainset_len: int, valset_len: int, trainable_params_count: int):
-    finetuned_modules = []
-    if SAM_LORA_FINETUNE_IMAGE_ENCODER:
-        finetuned_modules.append("image_encoder")
-    if SAM_LORA_FINETUNE_MASK_DECODER:
-        finetuned_modules.append("mask_decoder")
-    if SAM_LORA_FINETUNE_PROMPT_ENCODER:
-        finetuned_modules.append("prompt_encoder")
-
-    base_training_images = get_base_images(imgs_dir=TRAIN_IMAGES_DIR)
-
-    run = wandb.init(
-        entity=WANDB_ENTITY,
-        project=WANDB_PROJECT,
-        name=f"SAM_LoRA_Finetuning_{RUN_DATETIME_STR}",
-        config={
-            "learning_rate": SAM_LORA_LR,
-            "learning_rate_scheduler": SAM_LORA_SCHEDULER_TYPE,
-            "SAM_model_type": SAM_LORA_MODEL_TYPE,
-            "SAM_checkpoint": SAM_LORA_MODEL_CHECKPOINT,
-            "LoRA_rank": SAM_LORA_RANK,
-            "finetuned_modules": str(finetuned_modules),
-            "dataset": f"{DATASET_NAME}",
-            "train_set_size": trainset_len,
-            "val_set_size": valset_len,
-            "num_base_training_images": len(base_training_images),
-            "base_training_images": str(base_training_images),
-            "epochs": SAM_LORA_MAX_EPOCHS,
-            "batch_size": SAM_LORA_BATCH_SIZE,
-            "num_classes": SAM_LORA_NUM_CLASSES,
-            "trainable_parameters": trainable_params_count,
-            "bce_loss_weight": SAM_LORA_BCE_LOSS_WEIGHT,
-            "focal_loss_weight": SAM_LORA_FOCAL_LOSS_WEIGHT,
-            "focal_alpha": SAM_LORA_FOCAL_ALPHA,
-            "focal_gamma": SAM_LORA_FOCAL_GAMMA,
-            "dice_loss_weight": SAM_LORA_DICE_LOSS_WEIGHT,
-            "cl_dice_loss_weight": SAM_LORA_CL_DICE_LOSS_WEIGHT,
-            "cl_dice_skeletonize_iterations": SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS,
-            "skeleton_recall_loss_weight": SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT,
-            "junction_heatmap_weight_scale": SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE,
-            "junction_patch_weight": SAM_LORA_JUNCTION_PATCH_WEIGHT,
-            "junction_loss_type": SAM_LORA_JUNCTION_LOSS_TYPE,
-            "topological_loss_weight": SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT,
-            "dataset_downsample_size": DATASET_DOWNSAMPLE_SIZE,
-        },
-    )
-
-    run_out_dir = get_init_run_out_dir(run)
-    with open(str(run_out_dir / "wandb_run_id.txt"), "w") as f:
-        f.write(run.id)
-
-    return run
-
-
 def init_model(device: torch.device, verbose: bool = True) -> SamLoRA:
     if verbose:
         print(
@@ -263,8 +201,14 @@ def save_params(sam_lora: SamLoRA, wandb_run, suffix: str = None):
 
 
 def init_data_loaders():
+    heatmaps_dir = train_dir / HIGHRES_HEATMAP_PATCHES_DIR_NAME \
+        if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
+
     dataset = SegmentationDataset(
-        images_dir=TRAIN_IMAGES_DIR, masks_dir=TRAIN_MASKS_DIR, heatmaps_dir=TRAIN_HEATMAPS_DIR, downsample_size=DATASET_DOWNSAMPLE_SIZE)
+        images_dir=TRAIN_IMAGES_DIR,
+        masks_dir=TRAIN_MASKS_DIR,
+        heatmaps_dir=heatmaps_dir,
+        downsample_size=DATASET_DOWNSAMPLE_SIZE)
 
     indices = list(range(len(dataset)))
     np.random.shuffle(indices)
@@ -401,17 +345,17 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         # validation
         sam_lora.eval()
         total_validation_loss = 0.0
-        val_hard_dice_scores = []
-        val_hard_cldice_scores = []
+        val_cldice_scores = []
+        val_dice_scores = []
 
         with torch.no_grad():
             for batched_input, target_masks, heatmap_weights in validationloader:
                 batched_input = batched_input.to(device)
                 target_masks = target_masks.to(device)
                 heatmap_weights = heatmap_weights.to(device)
-                batched_input = get_batched_input_list(batched_input)
+                batched_input_list = get_batched_input_list(batched_input)
 
-                outputs = sam_lora(batched_input=batched_input,
+                outputs = sam_lora(batched_input=batched_input_list,
                                    multimask_output=SAM_LORA_NUM_CLASSES > 1)
                 output_logits = torch.cat([d["low_res_logits"]
                                           for d in outputs], dim=0)
@@ -420,17 +364,18 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                     target_masks,
                     heatmap_weights if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
                 )
+                total_validation_loss += loss.item() * len(batched_input_list)
 
-                total_validation_loss += loss.item() * len(batched_input)
+                for i, out in enumerate(outputs):
+                    pred_mask = out['masks'].squeeze().cpu()
+                    gt_mask = target_masks[i].squeeze().cpu()
 
-                for pred, target in zip(outputs, target_masks.unbind(0)):
-                    pred_mask = pred["masks"].squeeze(0)
-                    val_hard_dice_scores.append(
-                        hard_dice_score(pred_mask, target).item())
-                    pred_np = pred_mask.squeeze(0).cpu().numpy()
-                    target_np = target.squeeze(0).cpu().numpy()
-                    cldice, _, _ = hard_clDice(pred_np, target_np)
-                    val_hard_cldice_scores.append(cldice)
+                    cl_dice, _, _ = hard_clDice(
+                        pred_mask.numpy(), gt_mask.numpy())
+                    val_cldice_scores.append(cl_dice)
+
+                    val_dice_scores.append(
+                        hard_dice_score(pred_mask, gt_mask).item())
 
         # epoch metrics
         num_training_samples = len(trainloader) * trainloader.batch_size
@@ -444,20 +389,15 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         num_validation_samples = len(
             validationloader) * validationloader.batch_size
         mean_validation_loss = total_validation_loss / num_validation_samples
-        
-        mean_val_hard_dice = sum(val_hard_dice_scores) / \
-            len(val_hard_dice_scores)
-        mean_val_hard_cldice = sum(
-            val_hard_cldice_scores) / len(val_hard_cldice_scores)
-        val_composite_metric = (
-            VALIDATION_METRIC_CLDICE_ALPHA * mean_val_hard_cldice
-            + VALIDATION_METRIC_DICE_BETA * mean_val_hard_dice
-        )
+        mean_val_cldice = float(np.mean(val_cldice_scores))
+        mean_val_dice = float(np.mean(val_dice_scores))
+        # composite score: clDice-heavy since that's our topology focus
+        composite_score = 0.75 * mean_val_cldice + 0.25 * mean_val_dice
 
         print(f"    Validation Loss: {mean_validation_loss:.4f}")
-        print(f"    Validation Hard Dice: {mean_val_hard_dice:.4f}")
-        print(f"    Validation Hard clDice: {mean_val_hard_cldice:.4f}")
-        print(f"    Validation Composite Metric: {val_composite_metric:.4f}")
+        print(f"    Validation clDice: {mean_val_cldice:.4f}")
+        print(f"    Validation Dice: {mean_val_dice:.4f}")
+        print(f"    Validation Composite: {composite_score:.4f}")
         print(f"    Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
 
         if mean_validation_loss < min_validation_loss:
@@ -469,9 +409,9 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
             wandb_run.log({
                 "train/loss": mean_training_loss,
                 "validation/loss": mean_validation_loss,
-                "validation/hard_dice": mean_val_hard_dice,
-                "validation/hard_cldice": mean_val_hard_cldice,
-                "validation/composite_metric": val_composite_metric,
+                "validation/clDice": mean_val_cldice,
+                "validation/dice": mean_val_dice,
+                "validation/composite": composite_score,
                 "learning_rate": scheduler.get_last_lr()[0],
             })
 
@@ -508,16 +448,105 @@ def evaluate_checkpoints(wandb_run: wandb.Run, device: torch.device):
 
 
 def train_evaluate():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # We write sweep-controlled values back to the module globals so that
+    # init_model(), init_data_loaders(), train(), and evaluate_checkpoints()
+    # (which all read the globals directly) pick up the sweep-sampled values.
+    global SAM_LORA_LR, SAM_LORA_RANK, \
+        SAM_LORA_BCE_LOSS_WEIGHT, SAM_LORA_FOCAL_LOSS_WEIGHT, \
+        SAM_LORA_DICE_LOSS_WEIGHT, \
+        SAM_LORA_CL_DICE_LOSS_WEIGHT, SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT, \
+        SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT, \
+        SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE, SAM_LORA_JUNCTION_PATCH_WEIGHT, \
+        DATASET_DOWNSAMPLE_SIZE
 
-    sam_lora = init_model(device)
-    trainloader, validationloader, train_size, val_size = init_data_loaders()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     wandb_run = None
     if USE_WANDB:
         wandb.login(key=WANDB_API_KEY)
-        wandb_run = init_wandb_run(train_size, val_size, sum(
-            p.numel() for _, p in get_trainable_params(sam_lora)))
+
+        finetuned_modules = []
+        if SAM_LORA_FINETUNE_IMAGE_ENCODER:
+            finetuned_modules.append("image_encoder")
+        if SAM_LORA_FINETUNE_MASK_DECODER:
+            finetuned_modules.append("mask_decoder")
+        if SAM_LORA_FINETUNE_PROMPT_ENCODER:
+            finetuned_modules.append("prompt_encoder")
+
+        # Init wandb with ONLY non-swept metadata.  For sweep runs the
+        # agent pre-populates wandb_run.config with its sampled values
+        # *before* we touch it — we read those out below.
+        wandb_run = wandb.init(
+            entity=WANDB_ENTITY,
+            project=WANDB_PROJECT,
+            name=f"SAM_LoRA_Finetuning_{RUN_DATETIME_STR}",
+        )
+
+        # --- Step 1: If sweep run, override globals from sweep-sampled config ---
+        if wandb_run.sweep_id:
+            cfg = wandb_run.config
+            SAM_LORA_LR = cfg["learning_rate"]
+            SAM_LORA_RANK = cfg["lora_rank"]
+            SAM_LORA_BCE_LOSS_WEIGHT = cfg["bce_loss_weight"]
+            SAM_LORA_FOCAL_LOSS_WEIGHT = cfg["focal_loss_weight"]
+            SAM_LORA_DICE_LOSS_WEIGHT = cfg["dice_loss_weight"]
+            SAM_LORA_CL_DICE_LOSS_WEIGHT = cfg["cl_dice_loss_weight"]
+            SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT = cfg["skeleton_recall_loss_weight"]
+            SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT = cfg["topological_loss_weight"]
+            SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE = cfg["junction_heatmap_weight_scale"]
+            SAM_LORA_JUNCTION_PATCH_WEIGHT = cfg["junction_patch_weight"]
+
+            raw_ds = int(cfg["dataset_downsample_size"])
+            DATASET_DOWNSAMPLE_SIZE = (raw_ds, raw_ds) if raw_ds != 0 else None
+
+            print(f"[sweep] Run {wandb_run.id} — overriding globals from sweep config:")
+            for k, v in sorted(cfg.items()):
+                print(f"  {k}: {v}")
+
+        # --- Step 2: Record ALL hyperparameters (now final) to the run config ---
+        wandb_run.config.update({
+            "learning_rate": SAM_LORA_LR,
+            "learning_rate_scheduler": SAM_LORA_SCHEDULER_TYPE,
+            "SAM_model_type": SAM_LORA_MODEL_TYPE,
+            "SAM_checkpoint": SAM_LORA_MODEL_CHECKPOINT,
+            "lora_rank": SAM_LORA_RANK,
+            "finetuned_modules": str(finetuned_modules),
+            "dataset": DATASET_NAME,
+            "epochs": SAM_LORA_MAX_EPOCHS,
+            "batch_size": SAM_LORA_BATCH_SIZE,
+            "num_classes": SAM_LORA_NUM_CLASSES,
+            "bce_loss_weight": SAM_LORA_BCE_LOSS_WEIGHT,
+            "focal_loss_weight": SAM_LORA_FOCAL_LOSS_WEIGHT,
+            "focal_alpha": SAM_LORA_FOCAL_ALPHA,
+            "focal_gamma": SAM_LORA_FOCAL_GAMMA,
+            "dice_loss_weight": SAM_LORA_DICE_LOSS_WEIGHT,
+            "cl_dice_loss_weight": SAM_LORA_CL_DICE_LOSS_WEIGHT,
+            "cl_dice_skeletonize_iterations": SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS,
+            "skeleton_recall_loss_weight": SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT,
+            "junction_heatmap_weight_scale": SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE,
+            "junction_patch_weight": SAM_LORA_JUNCTION_PATCH_WEIGHT,
+            "junction_loss_type": SAM_LORA_JUNCTION_LOSS_TYPE,
+            "topological_loss_weight": SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT,
+            "dataset_downsample_size": DATASET_DOWNSAMPLE_SIZE[0] if DATASET_DOWNSAMPLE_SIZE else 0,
+        }, allow_val_change=True)
+
+        run_out_dir = get_init_run_out_dir(wandb_run)
+        with open(str(run_out_dir / "wandb_run_id.txt"), "w") as f:
+            f.write(wandb_run.id)
+
+    # model and data init happen AFTER globals are updated from sweep config
+    sam_lora = init_model(device)
+    trainloader, validationloader, train_size, val_size = init_data_loaders()
+
+    if USE_WANDB and wandb_run is not None:
+        base_training_images = get_base_images(imgs_dir=TRAIN_IMAGES_DIR)
+        wandb_run.config.update({
+            "train_set_size": train_size,
+            "val_set_size": val_size,
+            "num_base_training_images": len(base_training_images),
+            "base_training_images": str(base_training_images),
+            "trainable_parameters": sum(p.numel() for _, p in get_trainable_params(sam_lora)),
+        }, allow_val_change=True)
 
     train(sam_lora, wandb_run, trainloader, validationloader, device)
 
