@@ -39,12 +39,15 @@ WANDB_API_KEY = os.getenv("WANDB_API_KEY")
 
 SAM_LORA_FINETUNE_IMAGE_ENCODER = load_as_bool(
     "SAM_LORA_FINETUNE_IMAGE_ENCODER", False)
+SAM_LORA_FINETUNE_IMAGE_ENCODER_N_BLOCKS = load_as(
+    "SAM_LORA_FINETUNE_IMAGE_ENCODER_N_BLOCKS", int, 0)
 SAM_LORA_FINETUNE_MASK_DECODER = load_as_bool(
     "SAM_LORA_FINETUNE_MASK_DECODER", True)
 SAM_LORA_FINETUNE_PROMPT_ENCODER = load_as_bool(
     "SAM_LORA_FINETUNE_PROMPT_ENCODER", True)
 
 SAM_LORA_LR = load_as("SAM_LORA_LR", float, 1e-3)
+SAM_LORA_IMAGE_ENCODER_LR = load_as("SAM_LORA_IMAGE_ENCODER_LR", float, None)
 SAM_LORA_NUM_CLASSES = load_as("SAM_LORA_NUM_CLASSES", int, 1)
 SAM_LORA_BATCH_SIZE = load_as("SAM_LORA_BATCH_SIZE", int, 2)
 SAM_LORA_MAX_EPOCHS = load_as("SAM_LORA_MAX_EPOCHS", int, 150)
@@ -178,6 +181,7 @@ def init_model(device: torch.device, verbose: bool = True) -> SamLoRA:
             f"SAM model loaded on {sam.device}, with {sum(p.numel() for p in sam.parameters() if p.requires_grad)} trainable parameters")
 
     sam_lora = SamLoRA(sam, r=SAM_LORA_RANK, finetune_img_encoder=SAM_LORA_FINETUNE_IMAGE_ENCODER,
+                       finetune_img_encoder_n_blocks=SAM_LORA_FINETUNE_IMAGE_ENCODER_N_BLOCKS,
                        finetune_mask_decoder=SAM_LORA_FINETUNE_MASK_DECODER, finetune_prompt_encoder=SAM_LORA_FINETUNE_PROMPT_ENCODER)
     sam_lora.to(device)
 
@@ -236,13 +240,13 @@ def get_trainable_params(sam_lora: SamLoRA):
     ]
 
 
-def init_scheduler(optimizer, max_epochs, steps_per_epoch):
+def init_scheduler(optimizer, max_epochs, steps_per_epoch, max_lrs):
     total_steps = max_epochs * steps_per_epoch
     scheduler = None
 
     if SAM_LORA_SCHEDULER_TYPE == "OneCycleLR":
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer, max_lr=SAM_LORA_LR, total_steps=total_steps, pct_start=0.1, anneal_strategy="cos", div_factor=10.0, final_div_factor=10.0)
+            optimizer, max_lr=max_lrs, total_steps=total_steps, pct_start=0.1, anneal_strategy="cos", div_factor=10.0, final_div_factor=10.0)
     elif SAM_LORA_SCHEDULER_TYPE == "CosineAnnealingLR":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=total_steps, eta_min=0.0001)
@@ -269,13 +273,24 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         print(f"Training: {name} with {p.numel()} parameters")
     print()
 
-    optimizer = torch.optim.AdamW(
-        params=[p for _, p in trainable_params],
-        lr=SAM_LORA_LR,
-    )
+    img_enc_params = [p for name, p in trainable_params if name.startswith("sam_model.image_encoder.")]
+    other_params = [p for name, p in trainable_params if not name.startswith("sam_model.image_encoder.")]
+
+    if SAM_LORA_IMAGE_ENCODER_LR is not None and img_enc_params:
+        optimizer = torch.optim.AdamW([
+            {"params": img_enc_params, "lr": SAM_LORA_IMAGE_ENCODER_LR},
+            {"params": other_params, "lr": SAM_LORA_LR},
+        ])
+        scheduler_max_lrs = [SAM_LORA_IMAGE_ENCODER_LR, SAM_LORA_LR]
+    else:
+        optimizer = torch.optim.AdamW(
+            params=[p for _, p in trainable_params],
+            lr=SAM_LORA_LR,
+        )
+        scheduler_max_lrs = SAM_LORA_LR
 
     scheduler = init_scheduler(
-        optimizer, SAM_LORA_MAX_EPOCHS, len(trainloader))
+        optimizer, SAM_LORA_MAX_EPOCHS, len(trainloader), scheduler_max_lrs)
 
     min_validation_loss = float('inf')
     early_stopping = EarlyStopping(
@@ -398,7 +413,11 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         print(f"    Validation clDice: {mean_val_cldice:.4f}")
         print(f"    Validation Dice: {mean_val_dice:.4f}")
         print(f"    Validation Composite: {composite_score:.4f}")
-        print(f"    Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
+        last_lrs = scheduler.get_last_lr()
+        main_lr = last_lrs[-1]
+        print(f"    Learning Rate: {main_lr:.6f}")
+        if len(last_lrs) > 1:
+            print(f"    Image Encoder Learning Rate: {last_lrs[0]:.6f}")
 
         if mean_validation_loss < min_validation_loss:
             min_validation_loss = mean_validation_loss
@@ -406,14 +425,17 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
             save_params(sam_lora, wandb_run, "minloss")
 
         if USE_WANDB and wandb_run is not None:
-            wandb_run.log({
+            wandb_log = {
                 "train/loss": mean_training_loss,
                 "validation/loss": mean_validation_loss,
                 "validation/clDice": mean_val_cldice,
                 "validation/dice": mean_val_dice,
                 "validation/composite": composite_score,
-                "learning_rate": scheduler.get_last_lr()[0],
-            })
+                "learning_rate": main_lr,
+            }
+            if len(last_lrs) > 1:
+                wandb_log["learning_rate_image_encoder"] = last_lrs[0]
+            wandb_run.log(wandb_log)
 
         # early stopping
         if early_stopping(mean_validation_loss, epoch):
@@ -466,8 +488,10 @@ def train_evaluate():
         wandb.login(key=WANDB_API_KEY)
 
         finetuned_modules = []
-        if SAM_LORA_FINETUNE_IMAGE_ENCODER:
-            finetuned_modules.append("image_encoder")
+        if SAM_LORA_FINETUNE_IMAGE_ENCODER_N_BLOCKS > 0:
+            finetuned_modules.append(f"image_encoder_last_{SAM_LORA_FINETUNE_IMAGE_ENCODER_N_BLOCKS}_blocks_full")
+        elif SAM_LORA_FINETUNE_IMAGE_ENCODER:
+            finetuned_modules.append("image_encoder_lora")
         if SAM_LORA_FINETUNE_MASK_DECODER:
             finetuned_modules.append("mask_decoder")
         if SAM_LORA_FINETUNE_PROMPT_ENCODER:
@@ -506,11 +530,13 @@ def train_evaluate():
         # --- Step 2: Record ALL hyperparameters (now final) to the run config ---
         wandb_run.config.update({
             "learning_rate": SAM_LORA_LR,
+            "learning_rate_image_encoder": SAM_LORA_IMAGE_ENCODER_LR if SAM_LORA_IMAGE_ENCODER_LR is not None else SAM_LORA_LR,
             "learning_rate_scheduler": SAM_LORA_SCHEDULER_TYPE,
             "SAM_model_type": SAM_LORA_MODEL_TYPE,
             "SAM_checkpoint": SAM_LORA_MODEL_CHECKPOINT,
             "lora_rank": SAM_LORA_RANK,
             "finetuned_modules": str(finetuned_modules),
+            "finetune_img_encoder_n_blocks": SAM_LORA_FINETUNE_IMAGE_ENCODER_N_BLOCKS,
             "dataset": DATASET_NAME,
             "epochs": SAM_LORA_MAX_EPOCHS,
             "batch_size": SAM_LORA_BATCH_SIZE,
