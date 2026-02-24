@@ -55,7 +55,7 @@ def remove_small_objects_from_batch(masks: torch.Tensor) -> torch.Tensor:
     return output
 
 
-def stitch_mask_tiles(masks: torch.Tensor, grid_size: tuple[int, int], original_input_patch_img_size: tuple[int, int]) -> torch.Tensor:
+def stitch_mask_tiles(masks: torch.Tensor, grid_size: tuple[int, int], original_input_patch_img_size: tuple[int, int], as_uint: bool = True) -> torch.Tensor:
     """
     :param masks: Tensor of shape (B, 1, H, W)
     :param grid_size: tuple of (grid_rows, grid_cols) indicating how patches were cut from the original full image
@@ -73,7 +73,10 @@ def stitch_mask_tiles(masks: torch.Tensor, grid_size: tuple[int, int], original_
         size=(original_input_patch_img_size[0],
               original_input_patch_img_size[1]),
         mode="nearest"
-    ).to(torch.uint8)
+    )
+
+    if as_uint:
+        masks = masks.to(torch.uint8)
 
     _, _, H, W = masks.shape
 
