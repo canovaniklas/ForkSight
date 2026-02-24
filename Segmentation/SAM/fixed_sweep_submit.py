@@ -3,7 +3,7 @@
 Submit a SLURM hyperparameter sweep from a YAML config.
 
 Usage:
-    python sweep_submit.py                           # uses default sweep_config.yaml
+    python sweep_submit.py                           # uses default fixed_sweep_config.yaml
     python sweep_submit.py --config my_sweep.yaml    # uses custom config
     python sweep_submit.py --dry-run                 # preview without submitting
 
@@ -21,7 +21,7 @@ from pathlib import Path
 import yaml
 
 SUBMIT_SCRIPT = Path(__file__).parent / "SAM_LoRA_train_submit.sh"
-DEFAULT_CONFIG = Path(__file__).parent / "sweep_config.yaml"
+DEFAULT_CONFIG = Path(__file__).parent / "fixed_sweep_config.yaml"
 
 
 def load_config(path: Path) -> dict:
