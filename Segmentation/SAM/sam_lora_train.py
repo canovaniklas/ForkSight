@@ -9,10 +9,11 @@ import torch
 from torch.utils.data import DataLoader, SubsetRandomSampler
 from pathlib import Path
 import wandb
+import ast
 
 from Segmentation.SAM.sam_lora import SamLoRA
 from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, SegmentationDataset, evaluate_model, get_batched_input_list, hard_clDice, hard_dice_score
-from Segmentation.Util.env_utils import load_as, load_as_bool, load_as_tuple, load_segmentation_env
+from Segmentation.Util.env_utils import load_as, load_as_bool, load_segmentation_env
 from Segmentation.Util.dataset_util import get_base_images
 
 load_segmentation_env()
@@ -48,22 +49,21 @@ SAM_LORA_FINETUNE_PROMPT_ENCODER = load_as_bool(
 
 SAM_LORA_LR = load_as("SAM_LORA_LR", float, 1e-3)
 SAM_LORA_IMAGE_ENCODER_LR = load_as("SAM_LORA_IMAGE_ENCODER_LR", float, None)
-SAM_LORA_NUM_CLASSES = load_as("SAM_LORA_NUM_CLASSES", int, 1)
-SAM_LORA_BATCH_SIZE = load_as("SAM_LORA_BATCH_SIZE", int, 2)
-SAM_LORA_MAX_EPOCHS = load_as("SAM_LORA_MAX_EPOCHS", int, 150)
+SAM_LORA_BATCH_SIZE = load_as("SAM_LORA_BATCH_SIZE", int, 20)
+SAM_LORA_MAX_EPOCHS = load_as("SAM_LORA_MAX_EPOCHS", int, 100)
 SAM_LORA_MODEL_TYPE = os.getenv("SAM_LORA_MODEL_TYPE", "vit_b")
 SAM_LORA_MODEL_CHECKPOINT = os.getenv(
     "SAM_LORA_MODEL_CHECKPOINT", "sam_vit_b_01ec64")
 SAM_LORA_RANK = load_as("SAM_LORA_RANK", int, 4)
 SAM_LORA_SCHEDULER_TYPE = os.getenv("SAM_LORA_SCHEDULER_TYPE", "OneCycleLR")
 
-SAM_LORA_BCE_LOSS_WEIGHT = load_as("SAM_LORA_BCE_LOSS_WEIGHT", float, 0.1)
+SAM_LORA_BCE_LOSS_WEIGHT = load_as("SAM_LORA_BCE_LOSS_WEIGHT", float, 0.0)
 SAM_LORA_FOCAL_LOSS_WEIGHT = load_as("SAM_LORA_FOCAL_LOSS_WEIGHT", float, 0.0)
 SAM_LORA_FOCAL_ALPHA = load_as("SAM_LORA_FOCAL_ALPHA", float, 0.25)
 SAM_LORA_FOCAL_GAMMA = load_as("SAM_LORA_FOCAL_GAMMA", float, 2.0)
-SAM_LORA_DICE_LOSS_WEIGHT = load_as("SAM_LORA_DICE_LOSS_WEIGHT", float, 0.45)
+SAM_LORA_DICE_LOSS_WEIGHT = load_as("SAM_LORA_DICE_LOSS_WEIGHT", float, 0.0)
 SAM_LORA_CL_DICE_LOSS_WEIGHT = load_as(
-    "SAM_LORA_CL_DICE_LOSS_WEIGHT", float, 0.45)
+    "SAM_LORA_CL_DICE_LOSS_WEIGHT", float, 0.0)
 SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS = load_as(
     "SAM_LORA_CL_DICE_SKELETONIZE_ITERATIONS", int, 15)
 SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT = load_as(
@@ -79,8 +79,8 @@ SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT = load_as(
     "SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT", float, 0.0)
 
 _raw_downsample = load_as("DATASET_DOWNSAMPLE_SIZE", int, None)
-DATASET_DOWNSAMPLE_SIZE = (
-    _raw_downsample, _raw_downsample) if _raw_downsample is not None else None
+DATASET_DOWNSAMPLE_SIZE = (_raw_downsample, _raw_downsample) if (
+    _raw_downsample is not None and _raw_downsample != 0) else None
 
 EARLY_STOPPING_PATIENCE = load_as("EARLY_STOPPING_PATIENCE", int, 15)
 EARLY_STOPPING_DELTA = load_as("EARLY_STOPPING_DELTA", float, 0.005)
@@ -240,6 +240,29 @@ def get_trainable_params(sam_lora: SamLoRA):
     ]
 
 
+def get_cfg_string_from_finetuned_components(finetune_image_encoder, finetune_mask_decoder, finetune_prompt_encoder, finetune_image_encoder_n_blocks):
+    modules = []
+    if finetune_image_encoder_n_blocks > 0:
+        modules.append(f"image_encoder_last_N_blocks_full")
+    elif finetune_image_encoder:
+        modules.append("image_encoder_lora")
+    if finetune_mask_decoder:
+        modules.append("mask_decoder")
+    if finetune_prompt_encoder:
+        modules.append("prompt_encoder")
+
+    return modules
+
+
+def get_finetuned_components_from_cfg(finetuned_modules):
+    finetune_img_encoder = "image_encoder_lora" in finetuned_modules
+    finetune_mask_decoder = "mask_decoder" in finetuned_modules
+    finetune_prompt_encoder = "prompt_encoder" in finetuned_modules
+    finetune_img_encoder_blocks = "image_encoder_last_N_blocks_full" in finetuned_modules
+
+    return finetune_img_encoder, finetune_mask_decoder, finetune_prompt_encoder, finetune_img_encoder_blocks
+
+
 def init_scheduler(optimizer, max_epochs, steps_per_epoch, max_lrs):
     total_steps = max_epochs * steps_per_epoch
     scheduler = None
@@ -273,8 +296,10 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         print(f"Training: {name} with {p.numel()} parameters")
     print()
 
-    img_enc_params = [p for name, p in trainable_params if name.startswith("sam_model.image_encoder.")]
-    other_params = [p for name, p in trainable_params if not name.startswith("sam_model.image_encoder.")]
+    img_enc_params = [p for name, p in trainable_params if name.startswith(
+        "sam_model.image_encoder.")]
+    other_params = [p for name, p in trainable_params if not name.startswith(
+        "sam_model.image_encoder.")]
 
     if SAM_LORA_IMAGE_ENCODER_LR is not None and img_enc_params:
         optimizer = torch.optim.AdamW([
@@ -315,7 +340,7 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
 
             optimizer.zero_grad()
             outputs = sam_lora(batched_input=batched_input,
-                               multimask_output=SAM_LORA_NUM_CLASSES > 1)
+                               multimask_output=False)
             output_logits = torch.cat([d["low_res_logits"]
                                       for d in outputs], dim=0)
 
@@ -371,7 +396,7 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                 batched_input_list = get_batched_input_list(batched_input)
 
                 outputs = sam_lora(batched_input=batched_input_list,
-                                   multimask_output=SAM_LORA_NUM_CLASSES > 1)
+                                   multimask_output=False)
                 output_logits = torch.cat([d["low_res_logits"]
                                           for d in outputs], dim=0)
                 loss, _, _, _, _, _, _, _, _, _, _, _ = loss_fn(
@@ -473,7 +498,9 @@ def train_evaluate():
     # We write sweep-controlled values back to the module globals so that
     # init_model(), init_data_loaders(), train(), and evaluate_checkpoints()
     # (which all read the globals directly) pick up the sweep-sampled values.
-    global SAM_LORA_LR, SAM_LORA_RANK, \
+    global SAM_LORA_LR, SAM_LORA_RANK, SAM_LORA_IMAGE_ENCODER_LR,  \
+        SAM_LORA_FINETUNE_MASK_DECODER, SAM_LORA_FINETUNE_PROMPT_ENCODER, \
+        SAM_LORA_FINETUNE_IMAGE_ENCODER, SAM_LORA_FINETUNE_IMAGE_ENCODER_N_BLOCKS,   \
         SAM_LORA_BCE_LOSS_WEIGHT, SAM_LORA_FOCAL_LOSS_WEIGHT, \
         SAM_LORA_DICE_LOSS_WEIGHT, \
         SAM_LORA_CL_DICE_LOSS_WEIGHT, SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT, \
@@ -487,15 +514,9 @@ def train_evaluate():
     if USE_WANDB:
         wandb.login(key=WANDB_API_KEY)
 
-        finetuned_modules = []
-        if SAM_LORA_FINETUNE_IMAGE_ENCODER_N_BLOCKS > 0:
-            finetuned_modules.append(f"image_encoder_last_{SAM_LORA_FINETUNE_IMAGE_ENCODER_N_BLOCKS}_blocks_full")
-        elif SAM_LORA_FINETUNE_IMAGE_ENCODER:
-            finetuned_modules.append("image_encoder_lora")
-        if SAM_LORA_FINETUNE_MASK_DECODER:
-            finetuned_modules.append("mask_decoder")
-        if SAM_LORA_FINETUNE_PROMPT_ENCODER:
-            finetuned_modules.append("prompt_encoder")
+        finetuned_modules = get_cfg_string_from_finetuned_components(
+            SAM_LORA_FINETUNE_IMAGE_ENCODER, SAM_LORA_FINETUNE_MASK_DECODER,
+            SAM_LORA_FINETUNE_PROMPT_ENCODER, SAM_LORA_FINETUNE_IMAGE_ENCODER_N_BLOCKS)
 
         # Init wandb with ONLY non-swept metadata.  For sweep runs the
         # agent pre-populates wandb_run.config with its sampled values
@@ -509,23 +530,37 @@ def train_evaluate():
         # --- Step 1: If sweep run, override globals from sweep-sampled config ---
         if wandb_run.sweep_id:
             cfg = wandb_run.config
-            SAM_LORA_LR = cfg["learning_rate"]
-            SAM_LORA_RANK = cfg["lora_rank"]
-            SAM_LORA_BCE_LOSS_WEIGHT = cfg["bce_loss_weight"]
-            SAM_LORA_FOCAL_LOSS_WEIGHT = cfg["focal_loss_weight"]
-            SAM_LORA_DICE_LOSS_WEIGHT = cfg["dice_loss_weight"]
-            SAM_LORA_CL_DICE_LOSS_WEIGHT = cfg["cl_dice_loss_weight"]
-            SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT = cfg["skeleton_recall_loss_weight"]
-            SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT = cfg["topological_loss_weight"]
-            SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE = cfg["junction_heatmap_weight_scale"]
-            SAM_LORA_JUNCTION_PATCH_WEIGHT = cfg["junction_patch_weight"]
+            SAM_LORA_LR = cfg["learning_rate"] if "learning_rate" in cfg else SAM_LORA_LR
+            SAM_LORA_RANK = cfg["lora_rank"] if "lora_rank" in cfg else SAM_LORA_RANK
+            SAM_LORA_BCE_LOSS_WEIGHT = cfg["bce_loss_weight"] if "bce_loss_weight" in cfg else SAM_LORA_BCE_LOSS_WEIGHT
+            SAM_LORA_FOCAL_LOSS_WEIGHT = cfg["focal_loss_weight"] if "focal_loss_weight" in cfg else SAM_LORA_FOCAL_LOSS_WEIGHT
+            SAM_LORA_DICE_LOSS_WEIGHT = cfg["dice_loss_weight"] if "dice_loss_weight" in cfg else SAM_LORA_DICE_LOSS_WEIGHT
+            SAM_LORA_CL_DICE_LOSS_WEIGHT = cfg["cl_dice_loss_weight"] if "cl_dice_loss_weight" in cfg else SAM_LORA_CL_DICE_LOSS_WEIGHT
+            SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT = cfg[
+                "skeleton_recall_loss_weight"] if "skeleton_recall_loss_weight" in cfg else SAM_LORA_SKELETON_RECALL_LOSS_WEIGHT
+            SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT = cfg["topological_loss_weight"] if "topological_loss_weight" in cfg else SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT
+            SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE = cfg[
+                "junction_heatmap_weight_scale"] if "junction_heatmap_weight_scale" in cfg else SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE
+            SAM_LORA_JUNCTION_PATCH_WEIGHT = cfg["junction_patch_weight"] if "junction_patch_weight" in cfg else SAM_LORA_JUNCTION_PATCH_WEIGHT
+            SAM_LORA_IMAGE_ENCODER_LR = cfg["learning_rate_image_encoder"] if "learning_rate_image_encoder" in cfg else SAM_LORA_IMAGE_ENCODER_LR
 
-            raw_ds = int(cfg["dataset_downsample_size"])
-            DATASET_DOWNSAMPLE_SIZE = (raw_ds, raw_ds) if raw_ds != 0 else None
+            if "finetuned_modules" in cfg:
+                finetuned_modules = ast.literal_eval(cfg["finetuned_modules"])
+                SAM_LORA_FINETUNE_IMAGE_ENCODER, SAM_LORA_FINETUNE_MASK_DECODER, \
+                    SAM_LORA_FINETUNE_PROMPT_ENCODER, do_finetune_img_encoder_blocks = get_finetuned_components_from_cfg(
+                        finetuned_modules)
+                if do_finetune_img_encoder_blocks and "finetune_img_encoder_n_blocks" in cfg:
+                    SAM_LORA_FINETUNE_IMAGE_ENCODER_N_BLOCKS = cfg["finetune_img_encoder_n_blocks"]
 
-            print(f"[sweep] Run {wandb_run.id} — overriding globals from sweep config:")
-            for k, v in sorted(cfg.items()):
-                print(f"  {k}: {v}")
+            if "dataset_downsample_size" in cfg:
+                raw_ds = int(cfg["dataset_downsample_size"])
+                DATASET_DOWNSAMPLE_SIZE = (
+                    raw_ds, raw_ds) if raw_ds != 0 else None
+
+        print(
+            f"[sweep] Run {wandb_run.id} — overriding globals from sweep config:")
+        for k, v in sorted(cfg.items()):
+            print(f"  {k}: {v}")
 
         # --- Step 2: Record ALL hyperparameters (now final) to the run config ---
         wandb_run.config.update({
@@ -540,7 +575,6 @@ def train_evaluate():
             "dataset": DATASET_NAME,
             "epochs": SAM_LORA_MAX_EPOCHS,
             "batch_size": SAM_LORA_BATCH_SIZE,
-            "num_classes": SAM_LORA_NUM_CLASSES,
             "bce_loss_weight": SAM_LORA_BCE_LOSS_WEIGHT,
             "focal_loss_weight": SAM_LORA_FOCAL_LOSS_WEIGHT,
             "focal_alpha": SAM_LORA_FOCAL_ALPHA,
@@ -553,7 +587,7 @@ def train_evaluate():
             "junction_patch_weight": SAM_LORA_JUNCTION_PATCH_WEIGHT,
             "junction_loss_type": SAM_LORA_JUNCTION_LOSS_TYPE,
             "topological_loss_weight": SAM_LORA_TOPOLOGICAL_LOSS_WEIGHT,
-            "dataset_downsample_size": DATASET_DOWNSAMPLE_SIZE[0] if DATASET_DOWNSAMPLE_SIZE else 0,
+            "dataset_downsample_size": DATASET_DOWNSAMPLE_SIZE[0] if DATASET_DOWNSAMPLE_SIZE else None,
         }, allow_val_change=True)
 
         run_out_dir = get_init_run_out_dir(wandb_run)

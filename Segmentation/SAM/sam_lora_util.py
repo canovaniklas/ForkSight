@@ -16,6 +16,7 @@ from topolosses.losses import HutopoLoss
 
 from Segmentation.SAM.sam_lora import SamLoRA
 from Segmentation.Util.env_utils import load_segmentation_env
+from Evaluation.evaluation_util import compute_metrics as _eval_compute_metrics
 
 load_segmentation_env()
 
@@ -455,29 +456,6 @@ class CombinedLoss(nn.Module):
             dice_loss, cl_dice_loss, skeleton_recall_loss, junction_loss, topo_loss
 
 
-def hard_dice_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    intersection = torch.sum(pred * target)
-    union = torch.sum(pred) + torch.sum(target)
-    return (2 * intersection + 1e-6) / (union + 1e-6)
-
-
-def hard_clDice(mask_predicted, mask_target):
-    def cl_score(img, skeleton):
-        return (np.sum(img * skeleton) + 1e-6) / (np.sum(skeleton) + 1e-6)
-
-    tprec = cl_score(mask_target, skeletonize(mask_predicted))
-    tsens = cl_score(mask_predicted, skeletonize(mask_target))
-    cl_dice = (2 * tprec * tsens + 1e-6) / (tprec + tsens + 1e-6)
-
-    return cl_dice, tprec, tsens
-
-
-def iou_score(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    intersection = torch.sum(pred * target)
-    union = torch.sum(pred) + torch.sum(target) - intersection
-    return (intersection + 1e-6) / (union + 1e-6)
-
-
 def get_batched_input_list(batched_input: torch.Tensor):
     return [{
         "image": img,
@@ -517,21 +495,19 @@ def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, de
 
         output_logits = torch.cat([d["low_res_logits"]
                                    for d in outputs], dim=0)
-        output_mask = outputs[0]['masks'].squeeze(0)
+        output_mask = outputs[0]['masks']
 
         total_loss, _, _, _, _, _, _, _, _, _, _, _ = eval_loss_fn(
             output_logits, mask)
         losses.append(total_loss.item())
-        hard_dice_scores.append(hard_dice_score(output_mask, mask).item())
-        iou_scores.append(iou_score(output_mask, mask).item())
 
-        output_mask_np = output_mask.squeeze(0).cpu().numpy()
-        mask_np = mask.squeeze(0).cpu().numpy()
-
-        cl_dice_score, tprec, tsens = hard_clDice(output_mask_np, mask_np)
-        hard_clDice_scores.append(cl_dice_score)
-        tprec_scores.append(tprec)
-        tsens_scores.append(tsens)
+        _dice, _iou, _cl_dice, _tprec, _tsens = _eval_compute_metrics(
+            output_mask.unsqueeze(0).cpu(), mask.cpu())
+        hard_dice_scores.append(_dice.item())
+        iou_scores.append(_iou.item())
+        hard_clDice_scores.append(float(_cl_dice))
+        tprec_scores.append(float(_tprec))
+        tsens_scores.append(float(_tsens))
 
     metrics = {
         f"test/{model_params_name}/mean_bce_dice_loss": sum(losses) / len(losses),
