@@ -182,7 +182,7 @@ def main():
 
     print("\nTo submit SLURM jobs in WAVES (for better exploitation) (run from repo root):")
     print(
-        f"bash Segmentation/SAM/sweep_wandb_submit_waves.sh {path_cldice_lora} <wave1_size> <later_wave_size> <num_later_waves>")
+        f"  bash Segmentation/SAM/sweep_wandb_submit_waves.sh {path_cldice_lora} <wave1_size> <later_wave_size> <num_later_waves>")
     print(
         f"  bash Segmentation/SAM/sweep_wandb_submit_waves.sh {path_cldice_n_blocks} <wave1_size> <later_wave_size> <num_later_waves>")
     print(
