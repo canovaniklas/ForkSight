@@ -3,6 +3,7 @@ from datetime import datetime
 import random
 import sys
 from zoneinfo import ZoneInfo
+from Evaluation.evaluation_util import compute_metrics
 from segment_anything import sam_model_registry
 import numpy as np
 import torch
@@ -12,7 +13,7 @@ import wandb
 import ast
 
 from Segmentation.SAM.sam_lora import SamLoRA
-from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, SegmentationDataset, evaluate_model, get_batched_input_list, hard_clDice, hard_dice_score
+from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, SegmentationDataset, evaluate_model, get_batched_input_list
 from Segmentation.Util.env_utils import load_as, load_as_bool, load_segmentation_env
 from Segmentation.Util.dataset_util import get_base_images
 
@@ -410,12 +411,9 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                     pred_mask = out['masks'].squeeze().cpu()
                     gt_mask = target_masks[i].squeeze().cpu()
 
-                    cl_dice, _, _ = hard_clDice(
-                        pred_mask.numpy(), gt_mask.numpy())
-                    val_cldice_scores.append(cl_dice)
-
-                    val_dice_scores.append(
-                        hard_dice_score(pred_mask, gt_mask).item())
+                    dice, _, clDice, _, _ = compute_metrics(pred_mask, gt_mask)
+                    val_cldice_scores.append(clDice.item()) 
+                    val_dice_scores.append(dice.item())
 
         # epoch metrics
         num_training_samples = len(trainloader) * trainloader.batch_size
