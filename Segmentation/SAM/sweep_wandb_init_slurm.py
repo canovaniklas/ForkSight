@@ -40,10 +40,6 @@ SHARED_PARAMETERS = {
         "min": 1e-6,
         "max": 1e-3,
     },
-    "lora_rank": {
-        "distribution": "categorical",
-        "values": [4, 8, 16],
-    },
     "bce_loss_weight": {
         "distribution": "uniform",
         "min": 0.0,
@@ -113,16 +109,21 @@ skeleton_recall_config = {
 }
 
 img_encoder_lora_config = {
+    "lora_rank": {
+        "distribution": "categorical",
+        "values": [4, 8],
+    },
     "finetuned_modules": {"value": "['image_encoder_lora', 'mask_decoder', 'prompt_encoder']"},
     "finetune_img_encoder_n_blocks": {"value": 0},
 }
 
 img_encoder_n_blocks_config = {
-    "finetuned_modules": {"value": "['image_encoder_last_N_blocks_full', 'mask_decoder', 'prompt_encoder']"},
     "finetune_img_encoder_n_blocks": {
         "distribution": "categorical",
-        "values": [1, 2, 3, 4],
+        "values": [1, 2, 4],
     },
+    "finetuned_modules": {"value": "['image_encoder_last_N_blocks_full', 'mask_decoder', 'prompt_encoder']"},
+    "lora_rank": {"value": 0},
 }
 
 

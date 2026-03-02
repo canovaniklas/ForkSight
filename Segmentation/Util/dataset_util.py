@@ -23,7 +23,10 @@ def get_base_images(imgs_dir: Path, exclude_soi_images: bool = True) -> list[str
         if match and match not in base_image_paths:
             base_image_paths.add(match.group(1))
 
-    return list(base_image_paths)
+    base_image_paths_lst = list(base_image_paths)
+    base_image_paths_lst.sort()
+    
+    return base_image_paths_lst
 
 
 def create_patches_from_img(input_image_path: Path, patch_size: int = 1024) -> torch.Tensor:
@@ -35,6 +38,7 @@ def create_patches_from_img(input_image_path: Path, patch_size: int = 1024) -> t
     _, C, _, _, H, W = patches.shape
 
     return patches.permute(0, 2, 3, 1, 4, 5).reshape(-1, C, H, W)
+
 
 def parse_junction_annotations_xml(xml_path: str) -> Dict[str, List[Tuple[float, float]]]:
     """
