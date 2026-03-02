@@ -7,7 +7,7 @@ from Evaluation.evaluation_util import compute_metrics
 from segment_anything import sam_model_registry
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, SubsetRandomSampler
+from torch.utils.data import DataLoader
 from pathlib import Path
 import wandb
 import ast
@@ -25,7 +25,7 @@ MODEL_CHECKPOINTS_DIR = os.getenv("MODEL_CHECKPOINTS_DIR")
 MODEL_OUT_DIR = os.getenv("MODEL_OUT_DIR")
 DATASETS_DIR = os.getenv("DATASETS_DIR")
 
-DATASET_NAME = os.getenv("DATASET_NAME", "SAM_LoRA_Augmented")
+DATASET_NAME = os.getenv("DATASET_NAME", "Segmentation_v1")
 
 HIGHRES_IMG_PATCHES_DIR_NAME = os.getenv(
     "HIGHRES_IMG_PATCHES_DIR_NAME", "img_patches_1024")
@@ -101,9 +101,12 @@ if not Path(MODEL_OUT_DIR).is_dir():
         f"MODEL_OUT_DIR '{MODEL_OUT_DIR}' is not a valid directory.")
 
 train_dir = Path(DATASETS_DIR) / DATASET_NAME / "train"
+val_dir = Path(DATASETS_DIR) / DATASET_NAME / "validation"
 test_dir = Path(DATASETS_DIR) / DATASET_NAME / "test"
 TRAIN_IMAGES_DIR = train_dir / HIGHRES_IMG_PATCHES_DIR_NAME
 TRAIN_MASKS_DIR = train_dir / HIGHRES_MASK_PATCHES_DIR_NAME
+VAL_IMAGES_DIR = val_dir / HIGHRES_IMG_PATCHES_DIR_NAME
+VAL_MASKS_DIR = val_dir / HIGHRES_MASK_PATCHES_DIR_NAME
 TEST_IMAGES_DIR = test_dir / HIGHRES_IMG_PATCHES_DIR_NAME
 TEST_MASKS_DIR = test_dir / HIGHRES_MASK_PATCHES_DIR_NAME
 
@@ -206,32 +209,32 @@ def save_params(sam_lora: SamLoRA, wandb_run, suffix: str = None):
 
 
 def init_data_loaders():
-    heatmaps_dir = train_dir / HIGHRES_HEATMAP_PATCHES_DIR_NAME \
+    train_heatmaps_dir = train_dir / HIGHRES_HEATMAP_PATCHES_DIR_NAME \
+        if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
+    val_heatmaps_dir = val_dir / HIGHRES_HEATMAP_PATCHES_DIR_NAME \
         if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
 
-    dataset = SegmentationDataset(
+    train_dataset = SegmentationDataset(
         images_dir=TRAIN_IMAGES_DIR,
         masks_dir=TRAIN_MASKS_DIR,
-        heatmaps_dir=heatmaps_dir,
+        heatmaps_dir=train_heatmaps_dir,
         downsample_size=DATASET_DOWNSAMPLE_SIZE)
 
-    indices = list(range(len(dataset)))
-    np.random.shuffle(indices)
-    split = int(0.8 * len(indices))
-    train_indices, val_indices = indices[:split], indices[split:]
+    val_dataset = SegmentationDataset(
+        images_dir=VAL_IMAGES_DIR,
+        masks_dir=VAL_MASKS_DIR,
+        heatmaps_dir=val_heatmaps_dir,
+        downsample_size=DATASET_DOWNSAMPLE_SIZE)
 
-    print("\nNumber of training samples:", len(train_indices))
-    print("Number of validation samples:", len(val_indices), "\n")
-
-    train_sampler = SubsetRandomSampler(train_indices)
-    val_sampler = SubsetRandomSampler(val_indices)
+    print("\nNumber of training samples:", len(train_dataset))
+    print("Number of validation samples:", len(val_dataset), "\n")
 
     trainloader = DataLoader(
-        dataset, batch_size=SAM_LORA_BATCH_SIZE, sampler=train_sampler, drop_last=True)
+        train_dataset, batch_size=SAM_LORA_BATCH_SIZE, shuffle=True, drop_last=True)
     validationloader = DataLoader(
-        dataset, batch_size=SAM_LORA_BATCH_SIZE, sampler=val_sampler)
+        val_dataset, batch_size=SAM_LORA_BATCH_SIZE, shuffle=False)
 
-    return trainloader, validationloader, len(train_indices), len(val_indices)
+    return trainloader, validationloader, len(train_dataset), len(val_dataset)
 
 
 def get_trainable_params(sam_lora: SamLoRA):
