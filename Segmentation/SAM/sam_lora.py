@@ -43,7 +43,7 @@ class DecoderAttentionProjLoRA(nn.Module):
 
 
 class SamLoRA(nn.Module):
-    def __init__(self, sam_model: sam_modeling.Sam, r: int, finetune_img_encoder=True,
+    def __init__(self, sam_model: sam_modeling.Sam, r: int, finetune_img_encoder_lora=True,
                  finetune_img_encoder_n_blocks: int = 0,
                  finetune_mask_decoder=True, finetune_prompt_encoder=True):
         super().__init__()
@@ -64,7 +64,7 @@ class SamLoRA(nn.Module):
             for block in sam_model.image_encoder.blocks[-finetune_img_encoder_n_blocks:]:
                 for param in block.parameters():
                     param.requires_grad = True
-        elif finetune_img_encoder:
+        elif finetune_img_encoder_lora:
             # add LoRA to each image encoder block attention QKV
             for block in sam_model.image_encoder.blocks:
                 block.attn.qkv = EncoderQKVLoRA(block.attn.qkv, r)

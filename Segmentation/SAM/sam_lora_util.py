@@ -529,11 +529,20 @@ def initialize_sam_lora_with_params(wandb_run_config: dict[str, Any], params: Ma
 
     sam.to(device)
 
-    finetune_img_encoder = "image_encoder" in wandb_run_config["finetuned_modules"]
-    finetune_mask_decoder = "mask_decoder" in wandb_run_config["finetuned_modules"]
-    finetune_prompt_encoder = "prompt_encoder" in wandb_run_config["finetuned_modules"]
+    finetuned_modules = wandb_run_config.get("finetuned_modules", [])
 
-    sam_lora = SamLoRA(sam, r=wandb_run_config["LoRA_rank"], finetune_img_encoder=finetune_img_encoder,
+    finetune_img_encoder_last_n_blocks = 0
+    if "image_encoder_last_N_blocks_full" in finetuned_modules:
+        finetune_img_encoder_last_n_blocks = wandb_run_config.get(
+            "finetune_img_encoder_n_blocks", 0)
+    finetune_img_encoder_lora = "image_encoder_lora" in finetuned_modules
+    finetune_mask_decoder = "mask_decoder" in finetuned_modules
+    finetune_prompt_encoder = "prompt_encoder" in finetuned_modules
+
+    lora_rank = wandb_run_config.get("lora_rank", 4)
+
+    sam_lora = SamLoRA(sam, r=lora_rank, finetune_img_encoder_lora=finetune_img_encoder_lora,
+                       finetune_img_encoder_n_blocks=finetune_img_encoder_last_n_blocks,
                        finetune_mask_decoder=finetune_mask_decoder, finetune_prompt_encoder=finetune_prompt_encoder)
     sam_lora.to(device)
 

@@ -181,7 +181,7 @@ def init_model(device: torch.device, verbose: bool = True) -> SamLoRA:
         print(
             f"SAM model loaded on {sam.device}, with {sum(p.numel() for p in sam.parameters() if p.requires_grad)} trainable parameters")
 
-    sam_lora = SamLoRA(sam, r=SAM_LORA_RANK, finetune_img_encoder=SAM_LORA_FINETUNE_IMAGE_ENCODER,
+    sam_lora = SamLoRA(sam, r=SAM_LORA_RANK, finetune_img_encoder_lora=SAM_LORA_FINETUNE_IMAGE_ENCODER,
                        finetune_img_encoder_n_blocks=SAM_LORA_FINETUNE_IMAGE_ENCODER_N_BLOCKS,
                        finetune_mask_decoder=SAM_LORA_FINETUNE_MASK_DECODER, finetune_prompt_encoder=SAM_LORA_FINETUNE_PROMPT_ENCODER)
     sam_lora.to(device)
