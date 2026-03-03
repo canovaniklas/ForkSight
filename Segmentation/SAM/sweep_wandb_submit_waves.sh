@@ -1,4 +1,4 @@
-#!/bin/bash -l
+#!/bin/bash
 # Submit W&B sweep trials in waves with SLURM dependencies.
 # Wave 1 (exploration) runs more jobs in parallel; subsequent waves
 # run fewer so the Bayesian optimizer can learn between them.
@@ -31,7 +31,7 @@ echo ""
 PREV_JOB=$(sbatch --parsable \
     --array=1-"${WAVE1_SIZE}" \
     --job-name="wandb-w1-${SWEEP_ID}" \
-    --export=ALL,SWEEP_PATH="${SWEEP_PATH}" \
+    --export=SWEEP_PATH="${SWEEP_PATH}" \
     Segmentation/SAM/sweep_wandb_agent_job.sh)
 
 echo "Wave 1 (exploration): job ${PREV_JOB} — ${WAVE1_SIZE} parallel trials"
@@ -41,7 +41,7 @@ for wave in $(seq 2 $(( NUM_LATER_WAVES + 1 ))); do
     PREV_JOB=$(sbatch --parsable \
         --array=1-"${LATER_WAVE_SIZE}" \
         --job-name="wandb-w${wave}-${SWEEP_ID}" \
-        --export=ALL,SWEEP_PATH="${SWEEP_PATH}" \
+        --export=SWEEP_PATH="${SWEEP_PATH}" \
         --dependency=afterany:"${PREV_JOB}" \
         Segmentation/SAM/sweep_wandb_agent_job.sh)
 
