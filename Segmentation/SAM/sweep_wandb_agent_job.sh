@@ -1,16 +1,17 @@
-#!/bin/bash -l
+#!/bin/bash
 #SBATCH --partition=standard
 #SBATCH --gres=gpu:1
 #SBATCH --gpus=1 --constraint="GPUMEM80GB|GPUMEM96GB|GPUMEM140GB"
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=40G
 #SBATCH --time=10:00:00
+#SBATCH --export=NONE
 #SBATCH --output=/scratch/jhehli/logs/%x-%A_%a.out
 #SBATCH --error=/scratch/jhehli/logs/%x-%A_%a.err
 
 # One SLURM task runs one W&B agent which executes exactly one sweep trial (--count 1).
-# Called via sweep_wandb_submit_slurm.sh:
-#   sbatch --array=1-N --export=ALL,SWEEP_PATH=entity/project/sweep_id \
+# Called via sweep_wandb_submit_waves.sh:
+#   sbatch --array=1-N --export=SWEEP_PATH=entity/project/sweep_id \
 #       Segmentation/SAM/sweep_wandb_agent_job.sh
 
 set -euo pipefail
@@ -43,4 +44,4 @@ SWEEP_ID="${SWEEP_PATH##*/}"
 mkdir -p "wandb/sweep-${SWEEP_ID}"
 
 # run exactly one sweep trial on the allocated GPU and exit
-srun wandb agent --count 1 "${SWEEP_PATH}"
+python -m wandb agent --count 1 "${SWEEP_PATH}"
