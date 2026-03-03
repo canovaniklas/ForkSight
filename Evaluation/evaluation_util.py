@@ -131,8 +131,9 @@ def compute_metrics(
     return dice, iou, clDice, tprec, tsens
 
 
+@torch.no_grad()
 def collect_patch_metrics(model, loader, device) -> tuple:
-    """Run batched patch-level inference and return per-image metric lists,
+    """Run batched patch-level inference and return averaged metrics,
     computing metrics on both raw model outputs and post-processed masks
 
     Parameters
@@ -147,27 +148,31 @@ def collect_patch_metrics(model, loader, device) -> tuple:
 
     Returns
     -------
-    (raw_metrics, pp_metrics) where each is a 5-tuple of float lists:
-    (dice_s, iou_s, clDice_s, tprec_s, tsens_s).
+    (raw_metrics, pp_metrics) where each is a 5-tuple of floats: (dice_s, iou_s, clDice_s, tprec_s, tsens_s)
     """
     dice_s, iou_s, clDice_s, tprec_s, tsens_s = [], [], [], [], []
     pp_dice_s, pp_iou_s, pp_clDice_s, pp_tprec_s, pp_tsens_s = [], [], [], [], []
 
     for images, gt_masks, _ in loader:
         input_list = get_batched_input_list(images.to(device))
-        with torch.no_grad():
-            outputs = model(batched_input=input_list, multimask_output=False)
-
-        # Each out["masks"] has shape (1, H, W) (one mask per image from SAM).
-        # Stack without squeezing to preserve the channel dim: (B, 1, H, W).
-        output_masks = torch.stack(
-            [out["masks"] for out in outputs]).detach().cpu()
+        outputs = model(batched_input=input_list, multimask_output=False)
+        output_masks = torch.stack([out["masks"]
+                                   for out in outputs]).detach().cpu()
         pp_masks = remove_small_objects_from_batch(output_masks)
+
+        print(f"Processing batch of {output_masks.shape[0]} images")
+        print(f"    Output masks shape: {output_masks.shape}")
+        print(f"    Postprocessed output masks shape: {pp_masks.shape}")
+        print(f"    Ground truth masks shape: {gt_masks.shape}")
 
         for i in range(output_masks.shape[0]):
             gt = gt_masks[i:i + 1]
             pred = output_masks[i:i + 1]
             pp_pred = pp_masks[i:i + 1]
+
+            print(f"\n    processing image {i + 1}")
+            print(
+                f"    pred shape: {pred.shape}, pp_pred shape: {pp_pred.shape}, gt shape: {gt.shape}")
 
             dice, iou, clDice, tprec, tsens = compute_metrics(pred, gt)
             dice_s.append(dice.item())
@@ -185,8 +190,10 @@ def collect_patch_metrics(model, loader, device) -> tuple:
             pp_tsens_s.append(pp_tsens)
 
     return (
-        (dice_s, iou_s, clDice_s, tprec_s, tsens_s),
-        (pp_dice_s, pp_iou_s, pp_clDice_s, pp_tprec_s, pp_tsens_s),
+        (float(np.mean(dice_s)), float(np.mean(iou_s)), float(
+            np.mean(clDice_s)), float(np.mean(tprec_s)), float(np.mean(tsens_s))),
+        (float(np.mean(pp_dice_s)), float(np.mean(pp_iou_s)), float(
+            np.mean(pp_clDice_s)), float(np.mean(pp_tprec_s)), float(np.mean(pp_tsens_s))),
     )
 
 

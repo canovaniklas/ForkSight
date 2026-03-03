@@ -45,7 +45,7 @@ from Evaluation.evaluation_util import (
     load_transform_image,
 )
 
-MODELS = [
+MODELS_RUNS = [
     "SAM_LoRA_Finetuning_20260212_155155",
     "SAM_LoRA_Finetuning_20260212_155412",
     "SAM_LoRA_Finetuning_20260212_155506",
@@ -91,10 +91,6 @@ def _betti_col(prefix: str, threshold: float) -> str:
 
 def _collect_patch_metrics(model, test_img_dir, test_mask_dir, downsample_size, device, batch_size=8):
     """Run patch-level inference in batches using SegmentationDataset + DataLoader.
-
-    The GPU forward pass processes a full batch at once; per-image metric
-    computation (including skeletonization for clDice) happens on CPU after
-    moving tensors off the device.
     """
     dataset = sam_lora_util.SegmentationDataset(
         test_img_dir, test_mask_dir, downsample_size=downsample_size)
@@ -210,6 +206,8 @@ def main():
                         help="Batch size for patch-level inference (default: 8)")
     parser.add_argument("--force-recompute", action="store_true",
                         help="Re-evaluate all models, ignoring cached CSVs")
+    parser.add_argument("--dataset", type=str, default=None,
+                        help="dataset for evaluation, replaces run dataset if provided")
     args = parser.parse_args()
 
     env_utils.load_segmentation_env()
@@ -251,7 +249,7 @@ def main():
         r for r in all_runs
         if sam_lora_util.EVALUATED_TAG in r.tags
         and r.state == "finished"
-        and r.name in MODELS
+        and r.name in MODELS_RUNS
         and r.name not in computed_models
     ]
 
@@ -289,15 +287,19 @@ def main():
         downsample_size = run.config.get("dataset_downsample_size", None)
         if isinstance(downsample_size, list):
             downsample_size = tuple(downsample_size)
+        elif isinstance(downsample_size, int) and downsample_size > 0:
+            downsample_size = (downsample_size, downsample_size)
         print(f"  Downsample size: {downsample_size}")
 
-        test_img_dir = (Path(DATASETS_DIR) / run.config["dataset"]
-                        / "test" / HIGHRES_IMG_PATCHES_DIR_NAME)
-        test_mask_dir = (Path(DATASETS_DIR) / run.config["dataset"]
-                         / "test" / HIGHRES_MASK_PATCHES_DIR_NAME)
+        dataset_name = args.dataset if args.dataset else run.config.get(
+            "dataset", "")
+        test_img_dir = (Path(DATASETS_DIR) / dataset_name /
+                        "test" / HIGHRES_IMG_PATCHES_DIR_NAME)
+        test_mask_dir = (Path(DATASETS_DIR) / dataset_name /
+                         "test" / HIGHRES_MASK_PATCHES_DIR_NAME)
 
         print(
-            f"  Computing patch-level metrics (batch_size={args.batch_size}) …")
+            f"  Computing patch-level metrics (batch_size={args.batch_size})")
         (dice_s, iou_s, clDice_s, tprec_s, tsens_s), \
             (pp_dice_s, pp_iou_s, pp_clDice_s, pp_tprec_s, pp_tsens_s) = \
             _collect_patch_metrics(model, test_img_dir, test_mask_dir,
@@ -330,16 +332,16 @@ def main():
 
         result = {
             "dataset": run.config.get("dataset", ""),
-            "Dice": float(np.mean(dice_s)) if dice_s else float("nan"),
-            "IoU": float(np.mean(iou_s)) if iou_s else float("nan"),
-            "clDice": float(np.mean(clDice_s)) if clDice_s else float("nan"),
-            "tprec": float(np.mean(tprec_s)) if tprec_s else float("nan"),
-            "tsens": float(np.mean(tsens_s)) if tsens_s else float("nan"),
-            "Dice Postprocessed": float(np.mean(pp_dice_s)) if pp_dice_s else float("nan"),
-            "IoU Postprocessed": float(np.mean(pp_iou_s)) if pp_iou_s else float("nan"),
-            "clDice Postprocessed": float(np.mean(pp_clDice_s)) if pp_clDice_s else float("nan"),
-            "tprec Postprocessed": float(np.mean(pp_tprec_s)) if pp_tprec_s else float("nan"),
-            "tsens Postprocessed": float(np.mean(pp_tsens_s)) if pp_tsens_s else float("nan"),
+            "Dice": dice_s if dice_s else float("nan"),
+            "IoU": iou_s if iou_s else float("nan"),
+            "clDice": clDice_s if clDice_s else float("nan"),
+            "tprec": tprec_s if tprec_s else float("nan"),
+            "tsens": tsens_s if tsens_s else float("nan"),
+            "Dice Postprocessed": pp_dice_s if pp_dice_s else float("nan"),
+            "IoU Postprocessed": pp_iou_s if pp_iou_s else float("nan"),
+            "clDice Postprocessed": pp_clDice_s if pp_clDice_s else float("nan"),
+            "tprec Postprocessed": pp_tprec_s if pp_tprec_s else float("nan"),
+            "tsens Postprocessed": pp_tsens_s if pp_tsens_s else float("nan"),
             "Betti0 F-Score@0.5": betti0_fscore_summary,
             "Betti1 MAE@0.5": betti1_mae_summary,
         }
