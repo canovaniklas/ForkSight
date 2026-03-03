@@ -172,7 +172,7 @@ def collect_patch_metrics_and_betti(
         outputs = model(batched_input=input_list, multimask_output=False)
 
         output_masks = torch.stack([out["masks"]
-                                   for out in outputs]).detach().cpu()
+                                   for out in outputs]).squeeze(0).detach().cpu()
         pp_masks = remove_small_objects_from_batch(output_masks)
 
         # Probability maps: upsample low-res logits and apply sigmoid
@@ -187,10 +187,9 @@ def collect_patch_metrics_and_betti(
 
         for i in range(batch_size):
             patch_name = patch_names[i]
-
-            gt = gt_masks[i:i + 1]
-            pred = output_masks[i:i + 1]
-            pp_pred = pp_masks[i:i + 1]
+            gt = gt_masks[i]
+            pred = output_masks[i]
+            pp_pred = pp_masks[i]
 
             print(
                 f"gt mask dim: {gt.shape}, pred mask dim: {pred.shape}, pp_pred mask dim: {pp_pred.shape}")
