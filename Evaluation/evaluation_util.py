@@ -113,7 +113,7 @@ def compute_metrics(
 ) -> tuple:
     """Compute Dice, IoU, clDice, tprec, and tsens between two binary masks.
 
-    Expects tensors of shape (1, 1, H, W) or (1, H, W).  The first dimension
+    Expects tensors of shape (1, H, W) or (H, W).  The first dimension
     is removed via squeeze(0) before passing to numpy-based functions.
 
     Returns

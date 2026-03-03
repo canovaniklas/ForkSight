@@ -502,7 +502,7 @@ def evaluate_model(model: SamLoRA, test_imgs_dir: Path, test_masks_dir: Path, de
         losses.append(total_loss.item())
 
         _dice, _iou, _cl_dice, _tprec, _tsens = _eval_compute_metrics(
-            output_mask.unsqueeze(0).cpu(), mask.cpu())
+            output_mask.squeeze(0).cpu(), mask.cpu())
         hard_dice_scores.append(_dice.item())
         iou_scores.append(_iou.item())
         hard_clDice_scores.append(float(_cl_dice))
