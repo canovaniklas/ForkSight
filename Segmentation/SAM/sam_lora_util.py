@@ -26,11 +26,13 @@ EVALUATED_TAG = "test-evaluated"
 
 
 class SegmentationDataset(Dataset):
-    def __init__(self, images_dir: Path, masks_dir: Path, heatmaps_dir: Path | None = None, downsample_size: tuple[int, int] = None):
+    def __init__(self, images_dir: Path, masks_dir: Path, heatmaps_dir: Path | None = None,
+                 downsample_size: tuple[int, int] = None, return_img_name: bool = False):
         self.image_paths = list(images_dir.glob("*.png"))
         self.masks_dir = masks_dir
         self.heatmaps_dir = heatmaps_dir
         self.downsample_size = downsample_size
+        self.return_img_name = return_img_name
 
     def _load_image(self, path: Path, is_mask: bool = False) -> torch.Tensor:
         transform_steps = []
@@ -71,6 +73,8 @@ class SegmentationDataset(Dataset):
         heatmap = self._load_heatmap(
             image_path) if self.heatmaps_dir else torch.zeros_like(mask)
 
+        if self.return_img_name:
+            return image, mask, heatmap, image_path.stem
         return image, mask, heatmap
 
 

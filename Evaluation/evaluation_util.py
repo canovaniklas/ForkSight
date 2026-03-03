@@ -12,9 +12,11 @@ from skimage.morphology import skeletonize
 
 from Segmentation.PostProcessing.segmentation_postprocessing import remove_small_objects_from_batch
 
+
 # CSV filename patterns
 METRICS_PATTERN = re.compile(r"^metrics_(\d{8}_\d{6})\.csv$")
 BETTI_PATTERN = re.compile(r"^betti_(\d{8}_\d{6})\.csv$")
+PERSISTENCE_PATTERN = re.compile(r"^persistence_(\d{8}_\d{6})\.csv$")
 
 
 def format_score(x) -> str:
@@ -132,69 +134,151 @@ def compute_metrics(
 
 
 @torch.no_grad()
-def collect_patch_metrics(model, loader, device) -> tuple:
-    """Run batched patch-level inference and return averaged metrics,
-    computing metrics on both raw model outputs and post-processed masks
+def collect_patch_metrics_and_betti(
+    model,
+    loader,
+    device,
+    run_name: str,
+) -> tuple:
+    """Run batched patch-level inference once, computing both segmentation
+    metrics and per-patch persistence diagram data
 
     Parameters
     ----------
     model:
-        model in eval mode.
+        Model in eval mode.
     loader:
-        DataLoader yielding (images, gt_masks, _) tuples.
-        images shape: (B, 3, H, W); gt_masks shape: (B, 1, H, W).
+        DataLoader from a SegmentationDataset with ``return_img_name=True``,
+        yielding (images, gt_masks, _, patch_names) tuples with shuffle=False.
     device:
-        Torch device for the forward pass.
+        Torch device
+    run_name:
+        Model/run identifier
 
     Returns
     -------
-    (raw_metrics, pp_metrics) where each is a 5-tuple of floats: (dice_s, iou_s, clDice_s, tprec_s, tsens_s)
+    raw_metrics     : 5-tuple of floats  (dice, iou, clDice, tprec, tsens)
+    pp_metrics      : 5-tuple of floats  (post-processed versions of the above)
+    persistence_rows: list of dicts, one row per birth-death pair per patch,
+                      with keys (model, image, type, dim, birth, death)
     """
     dice_s, iou_s, clDice_s, tprec_s, tsens_s = [], [], [], [], []
     pp_dice_s, pp_iou_s, pp_clDice_s, pp_tprec_s, pp_tsens_s = [], [], [], [], []
+    persistence_rows = []
 
-    for images, gt_masks, _ in loader:
+    for images, gt_masks, _, patch_names in loader:
+        batch_size = images.shape[0]
         input_list = get_batched_input_list(images.to(device))
         outputs = model(batched_input=input_list, multimask_output=False)
+
         output_masks = torch.stack([out["masks"]
                                    for out in outputs]).detach().cpu()
         pp_masks = remove_small_objects_from_batch(output_masks)
 
-        print(f"Processing batch of {output_masks.shape[0]} images")
-        print(f"    Output masks shape: {output_masks.shape}")
-        print(f"    Postprocessed output masks shape: {pp_masks.shape}")
-        print(f"    Ground truth masks shape: {gt_masks.shape}")
+        # Probability maps: upsample low-res logits and apply sigmoid
+        prob_maps = []
+        for out in outputs:
+            resized = model.sam_model.postprocess_masks(
+                out["low_res_logits"],
+                input_size=(1024, 1024),
+                original_size=(1024, 1024),
+            )
+            prob_maps.append(torch.sigmoid(resized).squeeze(0))
 
-        for i in range(output_masks.shape[0]):
+        for i in range(batch_size):
+            patch_name = patch_names[i]
+
             gt = gt_masks[i:i + 1]
             pred = output_masks[i:i + 1]
             pp_pred = pp_masks[i:i + 1]
 
-            print(f"\n    processing image {i + 1}")
             print(
-                f"    pred shape: {pred.shape}, pp_pred shape: {pp_pred.shape}, gt shape: {gt.shape}")
+                f"gt mask dim: {gt.shape}, pred mask dim: {pred.shape}, pp_pred mask dim: {pp_pred.shape}")
 
-            dice, iou, clDice, tprec, tsens = compute_metrics(pred, gt)
-            dice_s.append(dice.item())
+            # Segmentation metrics
+            d, iou, cl, tp, ts = compute_metrics(pred, gt)
+            dice_s.append(d.item())
             iou_s.append(iou.item())
-            clDice_s.append(clDice)
-            tprec_s.append(tprec)
-            tsens_s.append(tsens)
+            clDice_s.append(cl)
+            tprec_s.append(tp)
+            tsens_s.append(ts)
 
-            pp_dice, pp_iou, pp_clDice, pp_tprec, pp_tsens = compute_metrics(
-                pp_pred, gt)
-            pp_dice_s.append(pp_dice.item())
+            pp_d, pp_iou, pp_cl, pp_tp, pp_ts = compute_metrics(pp_pred, gt)
+            pp_dice_s.append(pp_d.item())
             pp_iou_s.append(pp_iou.item())
-            pp_clDice_s.append(pp_clDice)
-            pp_tprec_s.append(pp_tprec)
-            pp_tsens_s.append(pp_tsens)
+            pp_clDice_s.append(pp_cl)
+            pp_tprec_s.append(pp_tp)
+            pp_tsens_s.append(pp_ts)
 
-    return (
-        (float(np.mean(dice_s)), float(np.mean(iou_s)), float(
-            np.mean(clDice_s)), float(np.mean(tprec_s)), float(np.mean(tsens_s))),
-        (float(np.mean(pp_dice_s)), float(np.mean(pp_iou_s)), float(
-            np.mean(pp_clDice_s)), float(np.mean(pp_tprec_s)), float(np.mean(pp_tsens_s))),
+            # Persistence diagrams
+            prob_np = prob_maps[i].squeeze(0).cpu().numpy()
+            gt_np = gt.squeeze(0).cpu().numpy()
+            print(
+                f"numpy probability map dims: {prob_np.shape}, numpy gt mask dims: {gt_np.shape}")
+            pred_b0_pairs, pred_b1_pairs = get_persistence_pairs(prob_np)
+            gt_b0_pairs, gt_b1_pairs = get_persistence_pairs(gt_np)
+
+            for dim, pred_pairs, gt_pairs in [
+                (0, pred_b0_pairs, gt_b0_pairs),
+                (1, pred_b1_pairs, gt_b1_pairs),
+            ]:
+                for birth, death in pred_pairs:
+                    persistence_rows.append({
+                        "model": run_name, "image": patch_name,
+                        "type": "predicted", "dim": dim,
+                        "birth": birth, "death": death,
+                    })
+                for birth, death in gt_pairs:
+                    persistence_rows.append({
+                        "model": run_name, "image": patch_name,
+                        "type": "groundtruth", "dim": dim,
+                        "birth": birth, "death": death,
+                    })
+
+    mean_metrics_raw = (
+        float(np.mean(dice_s)), float(
+            np.mean(iou_s)), float(np.mean(clDice_s)),
+        float(np.mean(tprec_s)), float(np.mean(tsens_s)),
     )
+    mean_metrics_pp = (
+        float(np.mean(pp_dice_s)), float(
+            np.mean(pp_iou_s)), float(np.mean(pp_clDice_s)),
+        float(np.mean(pp_tprec_s)), float(np.mean(pp_tsens_s)),
+    )
+    return mean_metrics_raw, mean_metrics_pp, persistence_rows
+
+
+def get_persistence_pairs(
+    prob_map: np.ndarray,
+) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    """Compute cubical persistence pairs for a probability map.
+
+    The filtration is inverted (``filtration = 1 - prob_map``) so that
+    high-probability regions appear first.  Birth and death values are in
+    filtration space; convert back via ``probability = 1 - filtration_value``.
+
+    Parameters
+    ----------
+    prob_map:
+        2-D float array of predicted probabilities or a binary mask.
+
+    Returns
+    -------
+    b0_pairs : list of (birth, death) tuples for Betti-0
+    b1_pairs : list of (birth, death) tuples for Betti-1
+    """
+    padded = np.pad(prob_map, pad_width=1, mode="constant", constant_values=0)
+    filtration = 1.0 - padded
+    cc = gd.CubicalComplex(
+        dimensions=filtration.shape,
+        top_dimensional_cells=filtration.flatten(),
+    )
+    cc.compute_persistence()
+    b0_pairs = [(float(b), float(d))
+                for b, d in cc.persistence_intervals_in_dimension(0)]
+    b1_pairs = [(float(b), float(d))
+                for b, d in cc.persistence_intervals_in_dimension(1)]
+    return b0_pairs, b1_pairs
 
 
 def get_betti_at_thresholds(
@@ -243,67 +327,6 @@ def get_betti_at_thresholds(
     return b0, b1
 
 
-def topological_fscore_single(pred_b0: float, gt_b0: float) -> float:
-    """Topological F-score for a single image based on Betti-0.
-
-    Computes F1 between predicted and ground-truth number of connected
-    components using a capped precision/recall formulation.
-    """
-    if pred_b0 == 0 and gt_b0 == 0:
-        return 1.0
-    if pred_b0 == 0 or gt_b0 == 0:
-        return 0.0
-    rec = min(1.0, pred_b0 / gt_b0)
-    pre = min(1.0, gt_b0 / pred_b0)
-    return 2.0 * (pre * rec) / (pre + rec)
-
-
-def compute_betti_aggregate_metrics(
-    all_b0_curves: list,
-    all_b1_curves: list,
-    gt_b0_list: list,
-    gt_b1_list: list,
-    thresholds: np.ndarray,
-) -> tuple[list, list]:
-    """Compute per-threshold topological F-score (B0) and MAE (B1) over images.
-
-    Parameters
-    ----------
-    all_b0_curves:
-        List of length n_images; each element is a list of length n_thresholds
-        containing the predicted Betti-0 values.
-    all_b1_curves:
-        Same structure for Betti-1.
-    gt_b0_list:
-        Ground-truth Betti-0 (scalar) per image.
-    gt_b1_list:
-        Ground-truth Betti-1 (scalar) per image.
-    thresholds:
-        Array of threshold values used when computing the curves.
-
-    Returns
-    -------
-    fscore_per_threshold:
-        Mean topological F-score (Betti-0) at each threshold.
-    mae_b1_per_threshold:
-        Mean absolute error of Betti-1 at each threshold.
-    """
-    all_b0 = np.array(all_b0_curves)   # [n_images, n_thresholds]
-    all_b1 = np.array(all_b1_curves)
-    gt_b0 = np.array(gt_b0_list)
-    gt_b1 = np.array(gt_b1_list)
-
-    fscore_per_threshold, mae_b1_per_threshold = [], []
-    for i in range(len(thresholds)):
-        f_scores = [topological_fscore_single(p, g)
-                    for p, g in zip(all_b0[:, i], gt_b0)]
-        fscore_per_threshold.append(float(np.mean(f_scores)))
-        mae_b1_per_threshold.append(
-            float(np.mean(np.abs(all_b1[:, i] - gt_b1))))
-
-    return fscore_per_threshold, mae_b1_per_threshold
-
-
 def plot_betti_curve(
     thresholds: np.ndarray,
     pred_b0,
@@ -332,45 +355,6 @@ def plot_betti_curve(
     plt.tight_layout()
     plt.show()
     plt.close()
-
-
-def plot_betti_aggregate(
-    thresholds: np.ndarray,
-    fscore_per_threshold: list,
-    mae_b1_per_threshold: list,
-    label: str = "",
-    ax_f=None,
-    ax_e=None,
-    figsize: tuple = (10, 5),
-):
-    """Plot per-threshold Betti-0 F-score and Betti-1 MAE on twin axes.
-
-    If *ax_f* and *ax_e* are provided they are reused (for multi-model
-    overlays); otherwise a fresh figure is created.
-    """
-    created_fig = ax_f is None
-    if created_fig:
-        _, ax_f = plt.subplots(figsize=figsize)
-        ax_e = ax_f.twinx()
-
-    ax_f.plot(thresholds, fscore_per_threshold,
-              linewidth=2, label=f"B0 F-Score {label}")
-    ax_e.plot(thresholds, mae_b1_per_threshold,
-              linewidth=2, linestyle="--", label=f"B1 MAE {label}")
-
-    ax_f.set_xlabel("Probability Threshold")
-    ax_f.set_ylabel("Avg. Betti-0 F-Score")
-    ax_e.set_ylabel("Avg. Betti-1 MAE")
-    ax_f.invert_xaxis()
-
-    if created_fig:
-        ax_f.legend(loc="upper left")
-        ax_e.legend(loc="upper right")
-        plt.tight_layout()
-        plt.show()
-        plt.close()
-
-    return ax_f, ax_e
 
 
 def _load_latest_csv(metrics_dir: Path, pattern: re.Pattern) -> tuple[pd.DataFrame, Path | None]:
@@ -404,4 +388,14 @@ def load_latest_betti_csv(metrics_dir: Path) -> pd.DataFrame:
     Returns an empty DataFrame if none exists.
     """
     df, _ = _load_latest_csv(metrics_dir, BETTI_PATTERN)
+    return df
+
+
+def load_latest_persistence_csv(metrics_dir: Path) -> pd.DataFrame:
+    """Load the most recent ``persistence_YYYYMMDD_HHMMSS.csv`` in *metrics_dir*.
+
+    Returns an empty DataFrame if none exists.
+    Columns: model, image, type, dim, birth, death.
+    """
+    df, _ = _load_latest_csv(metrics_dir, PERSISTENCE_PATTERN)
     return df
