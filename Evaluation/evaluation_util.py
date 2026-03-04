@@ -8,6 +8,7 @@ import torchvision.transforms as transforms
 from PIL import Image
 from matplotlib import pyplot as plt
 import gudhi as gd
+from gudhi.wasserstein import wasserstein_distance as gudhi_wasserstein_distance
 from scipy.ndimage import distance_transform_edt
 from skimage.morphology import skeletonize
 
@@ -25,6 +26,10 @@ PERSISTENCE_SDT_B0_PATTERN = re.compile(
     r"^persistence_sdt_b0_(\d{8}_\d{6})\.csv$")
 PERSISTENCE_SDT_B1_PATTERN = re.compile(
     r"^persistence_sdt_b1_(\d{8}_\d{6})\.csv$")
+PERSISTENCE_DIST_PATTERN = re.compile(
+    r"^persistence_distances_(\d{8}_\d{6})\.csv$")
+
+PERSISTENCE_THRESHOLD = 0.01
 
 
 def format_score(x) -> str:
@@ -165,16 +170,22 @@ def collect_patch_metrics_and_betti(
 
     Returns
     -------
-    raw_metrics  : 5-tuple of floats  (dice, iou, clDice, tprec, tsens)
-    pp_metrics   : 5-tuple of floats  (post-processed versions of the above)
-    raw_b0_rows  : list of dicts, one row per Betti-0 birth-death pair on raw prob map,
-    raw_b1_rows  : list of dicts, one row per Betti-1 birth-death pair on raw prob map
-    sdt_b0_rows  : list of dicts, one row per Betti-0 birth-death pair on SDT map
-    sdt_b1_rows  : list of dicts, one row per Betti-1 birth-death pair on SDT map
+    raw_metrics          : 5-tuple of floats  (dice, iou, clDice, tprec, tsens)
+    pp_metrics           : 5-tuple of floats  (post-processed versions of the above)
+    raw_b0_rows          : list of dicts, one row per filtered Betti-0 pair on raw prob map
+    raw_b1_rows          : list of dicts, one row per filtered Betti-1 pair on raw prob map
+    sdt_b0_rows          : list of dicts, one row per filtered Betti-0 pair on SDT map
+    sdt_b1_rows          : list of dicts, one row per filtered Betti-1 pair on SDT map
+    pd_distance_rows     : list of dicts, one row per patch with Wasserstein and bottleneck
+                           distances for raw B0/B1 and SDT B0/B1
+    mean_pd_distances    : 8-tuple of floats
+                           (raw_b0_wd, raw_b0_bn, raw_b1_wd, raw_b1_bn,
+                            sdt_b0_wd, sdt_b0_bn, sdt_b1_wd, sdt_b1_bn)
     """
     dice_s, iou_s, clDice_s, tprec_s, tsens_s = [], [], [], [], []
     pp_dice_s, pp_iou_s, pp_clDice_s, pp_tprec_s, pp_tsens_s = [], [], [], [], []
     raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows = [], [], [], []
+    pd_distance_rows = []
 
     for images, gt_masks, _, patch_names in loader:
         batch_size = images.shape[0]
@@ -219,7 +230,7 @@ def collect_patch_metrics_and_betti(
             pp_tprec_s.append(pp_tp)
             pp_tsens_s.append(pp_ts)
 
-            # Persistence diagrams
+            # persistence diagrams on raw probability maps
             pred_b0_pairs, pred_b1_pairs = get_persistence_pairs(prob_maps[i])
             gt_b0_pairs, gt_b1_pairs = get_persistence_pairs(gt)
 
@@ -236,7 +247,7 @@ def collect_patch_metrics_and_betti(
                 raw_b1_rows.append({"model": run_name, "image": patch_name,
                                     "type": "groundtruth", "birth": birth, "death": death})
 
-            # SDT-based persistence: run on binary masks to reduce noise
+            # persistence diagrams on signed distance transform (SDT) maps calculated from binary masks
             pred_sdt_b0, pred_sdt_b1 = get_sdt_persistence_pairs(pred)
             gt_sdt_b0, gt_sdt_b1 = get_sdt_persistence_pairs(gt)
 
@@ -253,6 +264,28 @@ def collect_patch_metrics_and_betti(
                 sdt_b1_rows.append({"model": run_name, "image": patch_name,
                                     "type": "groundtruth", "birth": birth, "death": death})
 
+            # Persistence diagram distances (Wasserstein-1 and bottleneck)
+            raw_b0_wd, raw_b0_bn = compute_persistence_distances(
+                pred_b0_pairs, gt_b0_pairs)
+            raw_b1_wd, raw_b1_bn = compute_persistence_distances(
+                pred_b1_pairs, gt_b1_pairs)
+            sdt_b0_wd, sdt_b0_bn = compute_persistence_distances(
+                pred_sdt_b0, gt_sdt_b0)
+            sdt_b1_wd, sdt_b1_bn = compute_persistence_distances(
+                pred_sdt_b1, gt_sdt_b1)
+            pd_distance_rows.append({
+                "model": run_name,
+                "image": patch_name,
+                "raw_b0_wasserstein": raw_b0_wd,
+                "raw_b0_bottleneck": raw_b0_bn,
+                "raw_b1_wasserstein": raw_b1_wd,
+                "raw_b1_bottleneck": raw_b1_bn,
+                "sdt_b0_wasserstein": sdt_b0_wd,
+                "sdt_b0_bottleneck": sdt_b0_bn,
+                "sdt_b1_wasserstein": sdt_b1_wd,
+                "sdt_b1_bottleneck": sdt_b1_bn,
+            })
+
     mean_metrics_raw = (
         float(np.mean(dice_s)), float(
             np.mean(iou_s)), float(np.mean(clDice_s)),
@@ -263,22 +296,45 @@ def collect_patch_metrics_and_betti(
             np.mean(pp_iou_s)), float(np.mean(pp_clDice_s)),
         float(np.mean(pp_tprec_s)), float(np.mean(pp_tsens_s)),
     )
-    return mean_metrics_raw, mean_metrics_pp, raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows
+
+    def _nanmean_col(key):
+        vals = [r[key] for r in pd_distance_rows]
+        return float(np.nanmean(vals)) if vals else float("nan")
+
+    mean_pd_distances = (
+        _nanmean_col("raw_b0_wasserstein"),
+        _nanmean_col("raw_b0_bottleneck"),
+        _nanmean_col("raw_b1_wasserstein"),
+        _nanmean_col("raw_b1_bottleneck"),
+        _nanmean_col("sdt_b0_wasserstein"),
+        _nanmean_col("sdt_b0_bottleneck"),
+        _nanmean_col("sdt_b1_wasserstein"),
+        _nanmean_col("sdt_b1_bottleneck"),
+    )
+    return (mean_metrics_raw, mean_metrics_pp,
+            raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows,
+            pd_distance_rows, mean_pd_distances)
 
 
 def get_persistence_pairs_from_filtration(
     filtration: np.ndarray,
+    threshold: float = PERSISTENCE_THRESHOLD,
 ) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
-    """Compute cubical persistence pairs for a given filtration array."""
+    """Compute cubical persistence pairs for a given filtration array.
+
+    Pairs with persistence (death - birth) below *threshold* are discarded.
+    """
     cc = gd.CubicalComplex(
         dimensions=filtration.shape,
         top_dimensional_cells=filtration.flatten(),
     )
     cc.compute_persistence()
     b0_pairs = [(float(b), float(d))
-                for b, d in cc.persistence_intervals_in_dimension(0)]
+                for b, d in cc.persistence_intervals_in_dimension(0)
+                if (float(d) - float(b)) >= threshold]
     b1_pairs = [(float(b), float(d))
-                for b, d in cc.persistence_intervals_in_dimension(1)]
+                for b, d in cc.persistence_intervals_in_dimension(1)
+                if (float(d) - float(b)) >= threshold]
     return b0_pairs, b1_pairs
 
 
@@ -331,6 +387,35 @@ def get_sdt_persistence_pairs(mask: torch.Tensor) -> tuple[list[tuple[float, flo
     sdt = inside - outside
     filtration = -sdt
     return get_persistence_pairs_from_filtration(filtration)
+
+
+def compute_persistence_distances(
+    pred_pairs: list[tuple[float, float]],
+    gt_pairs: list[tuple[float, float]],
+) -> tuple[float, float]:
+    """Compute Wasserstein-1 and bottleneck distance between two persistence diagrams.
+
+    Only finite-death pairs are used to avoid numerical issues with the single
+    essential (infinite-death) component present in every cubical complex.
+
+    Returns
+    -------
+    (wasserstein_dist, bottleneck_dist)
+    """
+    pred_finite = [(b, d) for b, d in pred_pairs if d < np.inf]
+    gt_finite = [(b, d) for b, d in gt_pairs if d < np.inf]
+    pred_arr = np.array(pred_finite, dtype=float)
+    gt_arr = np.array(gt_finite, dtype=float)
+    try:
+        wd = float(gudhi_wasserstein_distance(
+            pred_arr, gt_arr, internal_p=2.0))
+    except Exception:
+        wd = float("nan")
+    try:
+        bn = float(gd.bottleneck_distance(pred_arr, gt_arr))
+    except Exception:
+        bn = float("nan")
+    return wd, bn
 
 
 def get_betti_at_thresholds(
@@ -464,4 +549,16 @@ def load_latest_persistence_sdt_b0_csv(metrics_dir: Path) -> pd.DataFrame:
 def load_latest_persistence_sdt_b1_csv(metrics_dir: Path) -> pd.DataFrame:
     """Load the most recent ``persistence_sdt_b1_*.csv``. Columns: model, image, type, birth, death."""
     df, _ = _load_latest_csv(metrics_dir, PERSISTENCE_SDT_B1_PATTERN)
+    return df
+
+
+def load_latest_persistence_distances_csv(metrics_dir: Path) -> pd.DataFrame:
+    """Load the most recent ``persistence_distances_*.csv``.
+
+    Columns: model, image, raw_b0_wasserstein, raw_b0_bottleneck,
+             raw_b1_wasserstein, raw_b1_bottleneck,
+             sdt_b0_wasserstein, sdt_b0_bottleneck,
+             sdt_b1_wasserstein, sdt_b1_bottleneck.
+    """
+    df, _ = _load_latest_csv(metrics_dir, PERSISTENCE_DIST_PATTERN)
     return df

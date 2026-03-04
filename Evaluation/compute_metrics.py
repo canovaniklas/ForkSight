@@ -43,6 +43,7 @@ from Evaluation.evaluation_util import (
     load_latest_persistence_raw_b1_csv,
     load_latest_persistence_sdt_b0_csv,
     load_latest_persistence_sdt_b1_csv,
+    load_latest_persistence_distances_csv,
 )
 
 MODELS_RUNS = ["SAM_LoRA_Finetuning_20260219_150640"]
@@ -106,6 +107,8 @@ def main():
         _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
     df_prev_sdt_b1 = load_latest_persistence_sdt_b1_csv(
         _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
+    df_prev_dist = load_latest_persistence_distances_csv(
+        _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
     computed_models = set(
         df_prev_metrics.index) if not df_prev_metrics.empty else set()
 
@@ -127,6 +130,7 @@ def main():
 
     metrics_results = {}
     all_raw_b0_rows, all_raw_b1_rows, all_sdt_b0_rows, all_sdt_b1_rows = [], [], [], []
+    all_dist_rows = []
 
     for run in runs_to_eval:
         print(f"\n{'='*60}")
@@ -171,7 +175,10 @@ def main():
 
         (dice, iou, clDice, tprec, tsens), \
             (pp_dice, pp_iou, pp_clDice, pp_tprec, pp_tsens), \
-            raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows = \
+            raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows, \
+            pd_distance_rows, \
+            (raw_b0_wd, raw_b0_bn, raw_b1_wd, raw_b1_bn,
+             sdt_b0_wd, sdt_b0_bn, sdt_b1_wd, sdt_b1_bn) = \
             _collect_combined(model, test_img_dir, test_mask_dir,
                               downsample_size, device, args.batch_size, run.name)
 
@@ -179,6 +186,7 @@ def main():
         all_raw_b1_rows.extend(raw_b1_rows)
         all_sdt_b0_rows.extend(sdt_b0_rows)
         all_sdt_b1_rows.extend(sdt_b1_rows)
+        all_dist_rows.extend(pd_distance_rows)
         metrics_results[run.name] = {
             "dataset": run.config.get("dataset", ""),
             "Dice": dice if dice else float("nan"),
@@ -191,6 +199,14 @@ def main():
             "clDice Postprocessed": pp_clDice if pp_clDice else float("nan"),
             "tprec Postprocessed": pp_tprec if pp_tprec else float("nan"),
             "tsens Postprocessed": pp_tsens if pp_tsens else float("nan"),
+            "Wasserstein B0 Raw": raw_b0_wd,
+            "Bottleneck B0 Raw": raw_b0_bn,
+            "Wasserstein B1 Raw": raw_b1_wd,
+            "Bottleneck B1 Raw": raw_b1_bn,
+            "Wasserstein B0 SDT": sdt_b0_wd,
+            "Bottleneck B0 SDT": sdt_b0_bn,
+            "Wasserstein B1 SDT": sdt_b1_wd,
+            "Bottleneck B1 SDT": sdt_b1_bn,
         }
 
         del model, params
@@ -218,6 +234,7 @@ def main():
         ("persistence_raw_b1", all_raw_b1_rows, df_prev_raw_b1),
         ("persistence_sdt_b0", all_sdt_b0_rows, df_prev_sdt_b0),
         ("persistence_sdt_b1", all_sdt_b1_rows, df_prev_sdt_b1),
+        ("persistence_distances", all_dist_rows, df_prev_dist),
     ]
     for stem, new_rows, df_prev in _persistence_specs:
         df_new = pd.DataFrame(new_rows) if new_rows else pd.DataFrame()
