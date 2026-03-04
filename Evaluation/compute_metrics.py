@@ -46,7 +46,8 @@ from Evaluation.evaluation_util import (
     load_latest_persistence_distances_csv,
 )
 
-MODELS_RUNS = ["SAM_LoRA_Finetuning_20260219_150640"]
+MODELS_RUNS = ["SAM_LoRA_Finetuning_20260219_150640",
+               "SAM_LoRA_Finetuning_20260224_154858"]
 
 PARAMS_ARTIFACT_SUFFIX = "_params_minloss:v0"
 
@@ -171,7 +172,7 @@ def main():
                          "test" / HIGHRES_MASK_PATCHES_DIR_NAME)
 
         print(
-            f"  Computing patch-level metrics and persistence diagrams (dataset={dataset_name}, batch_size={args.batch_size})")
+            f"\n  Computing patch-level metrics and persistence diagrams (dataset={dataset_name}, batch_size={args.batch_size})")
 
         (dice, iou, clDice, tprec, tsens), \
             (pp_dice, pp_iou, pp_clDice, pp_tprec, pp_tsens), \
@@ -226,7 +227,7 @@ def main():
 
     metrics_path = _EVAL_DIR / f"metrics_{timestamp}.csv"
     df_new_metrics.to_csv(metrics_path)
-    print(f"\nSaved metrics to:      {metrics_path}")
+    print(f"\n  Saved metrics to:\t\t\t{metrics_path}")
 
     # Persistence diagram CSVs (one per Betti number × raw/SDT)
     _persistence_specs = [
@@ -245,7 +246,7 @@ def main():
         if not df_new.empty:
             path = _EVAL_DIR / f"{stem}_{timestamp}.csv"
             df_new.to_csv(path, index=False)
-            print(f"Saved persistence diagrams to: {path}")
+            print(f"  Saved persistence diagrams to:\t{path}")
 
     print("\nDone.")
 

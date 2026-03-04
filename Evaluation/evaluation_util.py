@@ -29,7 +29,8 @@ PERSISTENCE_SDT_B1_PATTERN = re.compile(
 PERSISTENCE_DIST_PATTERN = re.compile(
     r"^persistence_distances_(\d{8}_\d{6})\.csv$")
 
-PERSISTENCE_THRESHOLD = 0.01
+PERSISTENCE_THRESHOLD_RAW = 0.01
+PERSISTENCE_THRESHOLD_SDT = 2.0
 
 
 def format_score(x) -> str:
@@ -192,8 +193,8 @@ def collect_patch_metrics_and_betti(
         input_list = get_batched_input_list(images.to(device))
         outputs = model(batched_input=input_list, multimask_output=False)
 
-        output_masks = torch.stack([out["masks"]
-                                   for out in outputs]).squeeze(0).detach().cpu()
+        output_masks = torch.cat([out["masks"]
+                                 for out in outputs]).detach().cpu()
         pp_masks = remove_small_objects_from_batch(output_masks)
 
         # Probability maps: upsample low-res logits and apply sigmoid
@@ -318,7 +319,7 @@ def collect_patch_metrics_and_betti(
 
 def get_persistence_pairs_from_filtration(
     filtration: np.ndarray,
-    threshold: float = PERSISTENCE_THRESHOLD,
+    threshold: float,
 ) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
     """Compute cubical persistence pairs for a given filtration array.
 
@@ -360,7 +361,7 @@ def get_persistence_pairs(
     prob_map = prob_map.squeeze(0).cpu().numpy()
     padded = np.pad(prob_map, pad_width=1, mode="constant", constant_values=0)
     filtration = 1.0 - padded
-    return get_persistence_pairs_from_filtration(filtration)
+    return get_persistence_pairs_from_filtration(filtration, threshold=PERSISTENCE_THRESHOLD_RAW)
 
 
 def get_sdt_persistence_pairs(mask: torch.Tensor) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
@@ -386,7 +387,7 @@ def get_sdt_persistence_pairs(mask: torch.Tensor) -> tuple[list[tuple[float, flo
     outside = distance_transform_edt(~mask)
     sdt = inside - outside
     filtration = -sdt
-    return get_persistence_pairs_from_filtration(filtration)
+    return get_persistence_pairs_from_filtration(filtration, threshold=PERSISTENCE_THRESHOLD_SDT)
 
 
 def compute_persistence_distances(
