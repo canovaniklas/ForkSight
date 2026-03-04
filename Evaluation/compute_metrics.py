@@ -39,7 +39,10 @@ import Segmentation.Util.env_utils as env_utils
 from Evaluation.evaluation_util import (
     collect_patch_metrics_and_betti,
     load_latest_metrics_csv,
-    load_latest_persistence_csv,
+    load_latest_persistence_raw_b0_csv,
+    load_latest_persistence_raw_b1_csv,
+    load_latest_persistence_sdt_b0_csv,
+    load_latest_persistence_sdt_b1_csv,
 )
 
 MODELS_RUNS = ["SAM_LoRA_Finetuning_20260219_150640"]
@@ -95,7 +98,13 @@ def main():
 
     df_prev_metrics = load_latest_metrics_csv(
         _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
-    df_prev_persistence = load_latest_persistence_csv(
+    df_prev_raw_b0 = load_latest_persistence_raw_b0_csv(
+        _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
+    df_prev_raw_b1 = load_latest_persistence_raw_b1_csv(
+        _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
+    df_prev_sdt_b0 = load_latest_persistence_sdt_b0_csv(
+        _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
+    df_prev_sdt_b1 = load_latest_persistence_sdt_b1_csv(
         _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
     computed_models = set(
         df_prev_metrics.index) if not df_prev_metrics.empty else set()
@@ -117,7 +126,7 @@ def main():
               + ", ".join(r.name for r in runs_to_eval))
 
     metrics_results = {}
-    all_persistence_rows = []
+    all_raw_b0_rows, all_raw_b1_rows, all_sdt_b0_rows, all_sdt_b1_rows = [], [], [], []
 
     for run in runs_to_eval:
         print(f"\n{'='*60}")
@@ -162,11 +171,14 @@ def main():
 
         (dice, iou, clDice, tprec, tsens), \
             (pp_dice, pp_iou, pp_clDice, pp_tprec, pp_tsens), \
-            persistence_rows = \
+            raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows = \
             _collect_combined(model, test_img_dir, test_mask_dir,
                               downsample_size, device, args.batch_size, run.name)
 
-        all_persistence_rows.extend(persistence_rows)
+        all_raw_b0_rows.extend(raw_b0_rows)
+        all_raw_b1_rows.extend(raw_b1_rows)
+        all_sdt_b0_rows.extend(sdt_b0_rows)
+        all_sdt_b1_rows.extend(sdt_b1_rows)
         metrics_results[run.name] = {
             "dataset": run.config.get("dataset", ""),
             "Dice": dice if dice else float("nan"),
@@ -200,19 +212,23 @@ def main():
     df_new_metrics.to_csv(metrics_path)
     print(f"\nSaved metrics to:      {metrics_path}")
 
-    # Persistence diagram CSV
-    df_new_persistence = pd.DataFrame(
-        all_persistence_rows) if all_persistence_rows else pd.DataFrame()
-    if not df_prev_persistence.empty and not df_new_persistence.empty:
-        df_new_persistence = pd.concat(
-            [df_prev_persistence, df_new_persistence], ignore_index=True)
-    elif df_new_persistence.empty:
-        df_new_persistence = df_prev_persistence
-
-    if not df_new_persistence.empty:
-        persistence_path = _EVAL_DIR / f"persistence_{timestamp}.csv"
-        df_new_persistence.to_csv(persistence_path, index=False)
-        print(f"Saved persistence diagrams to: {persistence_path}")
+    # Persistence diagram CSVs (one per Betti number × raw/SDT)
+    _persistence_specs = [
+        ("persistence_raw_b0", all_raw_b0_rows, df_prev_raw_b0),
+        ("persistence_raw_b1", all_raw_b1_rows, df_prev_raw_b1),
+        ("persistence_sdt_b0", all_sdt_b0_rows, df_prev_sdt_b0),
+        ("persistence_sdt_b1", all_sdt_b1_rows, df_prev_sdt_b1),
+    ]
+    for stem, new_rows, df_prev in _persistence_specs:
+        df_new = pd.DataFrame(new_rows) if new_rows else pd.DataFrame()
+        if not df_prev.empty and not df_new.empty:
+            df_new = pd.concat([df_prev, df_new], ignore_index=True)
+        elif df_new.empty:
+            df_new = df_prev
+        if not df_new.empty:
+            path = _EVAL_DIR / f"{stem}_{timestamp}.csv"
+            df_new.to_csv(path, index=False)
+            print(f"Saved persistence diagrams to: {path}")
 
     print("\nDone.")
 

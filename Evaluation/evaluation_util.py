@@ -8,6 +8,7 @@ import torchvision.transforms as transforms
 from PIL import Image
 from matplotlib import pyplot as plt
 import gudhi as gd
+from scipy.ndimage import distance_transform_edt
 from skimage.morphology import skeletonize
 
 from Segmentation.PostProcessing.segmentation_postprocessing import remove_small_objects_from_batch
@@ -16,7 +17,14 @@ from Segmentation.PostProcessing.segmentation_postprocessing import remove_small
 # CSV filename patterns
 METRICS_PATTERN = re.compile(r"^metrics_(\d{8}_\d{6})\.csv$")
 BETTI_PATTERN = re.compile(r"^betti_(\d{8}_\d{6})\.csv$")
-PERSISTENCE_PATTERN = re.compile(r"^persistence_(\d{8}_\d{6})\.csv$")
+PERSISTENCE_RAW_B0_PATTERN = re.compile(
+    r"^persistence_raw_b0_(\d{8}_\d{6})\.csv$")
+PERSISTENCE_RAW_B1_PATTERN = re.compile(
+    r"^persistence_raw_b1_(\d{8}_\d{6})\.csv$")
+PERSISTENCE_SDT_B0_PATTERN = re.compile(
+    r"^persistence_sdt_b0_(\d{8}_\d{6})\.csv$")
+PERSISTENCE_SDT_B1_PATTERN = re.compile(
+    r"^persistence_sdt_b1_(\d{8}_\d{6})\.csv$")
 
 
 def format_score(x) -> str:
@@ -157,14 +165,16 @@ def collect_patch_metrics_and_betti(
 
     Returns
     -------
-    raw_metrics     : 5-tuple of floats  (dice, iou, clDice, tprec, tsens)
-    pp_metrics      : 5-tuple of floats  (post-processed versions of the above)
-    persistence_rows: list of dicts, one row per birth-death pair per patch,
-                      with keys (model, image, type, dim, birth, death)
+    raw_metrics  : 5-tuple of floats  (dice, iou, clDice, tprec, tsens)
+    pp_metrics   : 5-tuple of floats  (post-processed versions of the above)
+    raw_b0_rows  : list of dicts, one row per Betti-0 birth-death pair on raw prob map,
+    raw_b1_rows  : list of dicts, one row per Betti-1 birth-death pair on raw prob map
+    sdt_b0_rows  : list of dicts, one row per Betti-0 birth-death pair on SDT map
+    sdt_b1_rows  : list of dicts, one row per Betti-1 birth-death pair on SDT map
     """
     dice_s, iou_s, clDice_s, tprec_s, tsens_s = [], [], [], [], []
     pp_dice_s, pp_iou_s, pp_clDice_s, pp_tprec_s, pp_tsens_s = [], [], [], [], []
-    persistence_rows = []
+    raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows = [], [], [], []
 
     for images, gt_masks, _, patch_names in loader:
         batch_size = images.shape[0]
@@ -210,29 +220,38 @@ def collect_patch_metrics_and_betti(
             pp_tsens_s.append(pp_ts)
 
             # Persistence diagrams
-            prob_np = prob_maps[i].squeeze(0).cpu().numpy()
-            gt_np = gt.squeeze(0).cpu().numpy()
-            print(
-                f"numpy probability map dims: {prob_np.shape}, numpy gt mask dims: {gt_np.shape}")
-            pred_b0_pairs, pred_b1_pairs = get_persistence_pairs(prob_np)
-            gt_b0_pairs, gt_b1_pairs = get_persistence_pairs(gt_np)
+            pred_b0_pairs, pred_b1_pairs = get_persistence_pairs(prob_maps[i])
+            gt_b0_pairs, gt_b1_pairs = get_persistence_pairs(gt)
 
-            for dim, pred_pairs, gt_pairs in [
-                (0, pred_b0_pairs, gt_b0_pairs),
-                (1, pred_b1_pairs, gt_b1_pairs),
-            ]:
-                for birth, death in pred_pairs:
-                    persistence_rows.append({
-                        "model": run_name, "image": patch_name,
-                        "type": "predicted", "dim": dim,
-                        "birth": birth, "death": death,
-                    })
-                for birth, death in gt_pairs:
-                    persistence_rows.append({
-                        "model": run_name, "image": patch_name,
-                        "type": "groundtruth", "dim": dim,
-                        "birth": birth, "death": death,
-                    })
+            for birth, death in pred_b0_pairs:
+                raw_b0_rows.append({"model": run_name, "image": patch_name,
+                                    "type": "predicted", "birth": birth, "death": death})
+            for birth, death in gt_b0_pairs:
+                raw_b0_rows.append({"model": run_name, "image": patch_name,
+                                    "type": "groundtruth", "birth": birth, "death": death})
+            for birth, death in pred_b1_pairs:
+                raw_b1_rows.append({"model": run_name, "image": patch_name,
+                                    "type": "predicted", "birth": birth, "death": death})
+            for birth, death in gt_b1_pairs:
+                raw_b1_rows.append({"model": run_name, "image": patch_name,
+                                    "type": "groundtruth", "birth": birth, "death": death})
+
+            # SDT-based persistence: run on binary masks to reduce noise
+            pred_sdt_b0, pred_sdt_b1 = get_sdt_persistence_pairs(pred)
+            gt_sdt_b0, gt_sdt_b1 = get_sdt_persistence_pairs(gt)
+
+            for birth, death in pred_sdt_b0:
+                sdt_b0_rows.append({"model": run_name, "image": patch_name,
+                                    "type": "predicted", "birth": birth, "death": death})
+            for birth, death in gt_sdt_b0:
+                sdt_b0_rows.append({"model": run_name, "image": patch_name,
+                                    "type": "groundtruth", "birth": birth, "death": death})
+            for birth, death in pred_sdt_b1:
+                sdt_b1_rows.append({"model": run_name, "image": patch_name,
+                                    "type": "predicted", "birth": birth, "death": death})
+            for birth, death in gt_sdt_b1:
+                sdt_b1_rows.append({"model": run_name, "image": patch_name,
+                                    "type": "groundtruth", "birth": birth, "death": death})
 
     mean_metrics_raw = (
         float(np.mean(dice_s)), float(
@@ -244,30 +263,13 @@ def collect_patch_metrics_and_betti(
             np.mean(pp_iou_s)), float(np.mean(pp_clDice_s)),
         float(np.mean(pp_tprec_s)), float(np.mean(pp_tsens_s)),
     )
-    return mean_metrics_raw, mean_metrics_pp, persistence_rows
+    return mean_metrics_raw, mean_metrics_pp, raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows
 
 
-def get_persistence_pairs(
-    prob_map: np.ndarray,
+def get_persistence_pairs_from_filtration(
+    filtration: np.ndarray,
 ) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
-    """Compute cubical persistence pairs for a probability map.
-
-    The filtration is inverted (``filtration = 1 - prob_map``) so that
-    high-probability regions appear first.  Birth and death values are in
-    filtration space; convert back via ``probability = 1 - filtration_value``.
-
-    Parameters
-    ----------
-    prob_map:
-        2-D float array of predicted probabilities or a binary mask.
-
-    Returns
-    -------
-    b0_pairs : list of (birth, death) tuples for Betti-0
-    b1_pairs : list of (birth, death) tuples for Betti-1
-    """
-    padded = np.pad(prob_map, pad_width=1, mode="constant", constant_values=0)
-    filtration = 1.0 - padded
+    """Compute cubical persistence pairs for a given filtration array."""
     cc = gd.CubicalComplex(
         dimensions=filtration.shape,
         top_dimensional_cells=filtration.flatten(),
@@ -278,6 +280,57 @@ def get_persistence_pairs(
     b1_pairs = [(float(b), float(d))
                 for b, d in cc.persistence_intervals_in_dimension(1)]
     return b0_pairs, b1_pairs
+
+
+def get_persistence_pairs(
+    prob_map: torch,
+) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    """Compute cubical persistence pairs for a probability map.
+
+    The filtration is inverted (``filtration = 1 - prob_map``) so that
+    high-probability regions appear first.  Birth and death values are in
+    filtration space; convert back via ``probability = 1 - filtration_value``.
+
+    Parameters
+    ----------
+    prob_map:
+        tensor of shape (1, H, W) or (H, W) containing predicted probabilities in [0, 1].
+
+    Returns
+    -------
+    b0_pairs : list of (birth, death) tuples for Betti-0
+    b1_pairs : list of (birth, death) tuples for Betti-1
+    """
+    prob_map = prob_map.squeeze(0).cpu().numpy()
+    padded = np.pad(prob_map, pad_width=1, mode="constant", constant_values=0)
+    filtration = 1.0 - padded
+    return get_persistence_pairs_from_filtration(filtration)
+
+
+def get_sdt_persistence_pairs(mask: torch.Tensor) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    """Compute cubical persistence pairs on the signed distance transform (SDT)
+    of a binary mask.
+
+    The SDT is positive inside the mask and negative outside.  The filtration
+    is ``-SDT`` so that interior (positive) regions appear first in the
+    sublevel-set filtration, matching the convention used for probability maps.
+
+    Parameters
+    ----------
+    binary_mask:
+        mask tensor of shape (1, H, W) or (H, W)
+
+    Returns
+    -------
+    b0_pairs : list of (birth, death) tuples for Betti-0
+    b1_pairs : list of (birth, death) tuples for Betti-1
+    """
+    mask = mask.squeeze(0).cpu().numpy().astype(bool)
+    inside = distance_transform_edt(mask)
+    outside = distance_transform_edt(~mask)
+    sdt = inside - outside
+    filtration = -sdt
+    return get_persistence_pairs_from_filtration(filtration)
 
 
 def get_betti_at_thresholds(
@@ -390,11 +443,25 @@ def load_latest_betti_csv(metrics_dir: Path) -> pd.DataFrame:
     return df
 
 
-def load_latest_persistence_csv(metrics_dir: Path) -> pd.DataFrame:
-    """Load the most recent ``persistence_YYYYMMDD_HHMMSS.csv`` in *metrics_dir*.
+def load_latest_persistence_raw_b0_csv(metrics_dir: Path) -> pd.DataFrame:
+    """Load the most recent ``persistence_raw_b0_*.csv``. Columns: model, image, type, birth, death."""
+    df, _ = _load_latest_csv(metrics_dir, PERSISTENCE_RAW_B0_PATTERN)
+    return df
 
-    Returns an empty DataFrame if none exists.
-    Columns: model, image, type, dim, birth, death.
-    """
-    df, _ = _load_latest_csv(metrics_dir, PERSISTENCE_PATTERN)
+
+def load_latest_persistence_raw_b1_csv(metrics_dir: Path) -> pd.DataFrame:
+    """Load the most recent ``persistence_raw_b1_*.csv``. Columns: model, image, type, birth, death."""
+    df, _ = _load_latest_csv(metrics_dir, PERSISTENCE_RAW_B1_PATTERN)
+    return df
+
+
+def load_latest_persistence_sdt_b0_csv(metrics_dir: Path) -> pd.DataFrame:
+    """Load the most recent ``persistence_sdt_b0_*.csv``. Columns: model, image, type, birth, death."""
+    df, _ = _load_latest_csv(metrics_dir, PERSISTENCE_SDT_B0_PATTERN)
+    return df
+
+
+def load_latest_persistence_sdt_b1_csv(metrics_dir: Path) -> pd.DataFrame:
+    """Load the most recent ``persistence_sdt_b1_*.csv``. Columns: model, image, type, birth, death."""
+    df, _ = _load_latest_csv(metrics_dir, PERSISTENCE_SDT_B1_PATTERN)
     return df
