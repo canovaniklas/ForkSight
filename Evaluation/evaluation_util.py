@@ -7,6 +7,7 @@ import torch
 import torchvision.transforms as transforms
 from PIL import Image
 from matplotlib import pyplot as plt
+import matplotlib.patches as mpatches
 import gudhi as gd
 from gudhi.wasserstein import wasserstein_distance as gudhi_wasserstein_distance
 from scipy.ndimage import distance_transform_edt
@@ -147,12 +148,175 @@ def compute_metrics(
     return dice, iou, clDice, tprec, tsens
 
 
+_B0_COLOR = "tomato"
+_B1_COLOR = "steelblue"
+
+_LEGEND_HANDLES = [
+    mpatches.Patch(color=_B0_COLOR, label="B0 (components)"),
+    mpatches.Patch(color=_B1_COLOR, label="B1 (loops)"),
+]
+
+
+def _dynamic_lim(pairs_lists: list[list[tuple[float, float]]]) -> tuple[float, float]:
+    """Compute axis limits from multiple pair lists (finite pairs only)."""
+    all_vals = [v for pairs in pairs_lists for b,
+                d in pairs if d < np.inf for v in (b, d)]
+    if not all_vals:
+        return 0.0, 1.0
+    lo, hi = min(all_vals), max(all_vals)
+    pad = max((hi - lo) * 0.1, 0.05)
+    return lo - pad, hi + pad
+
+
+def _plot_pd_axis(
+    ax,
+    b0_pairs: list[tuple[float, float]],
+    b1_pairs: list[tuple[float, float]],
+    lim: tuple[float, float],
+) -> None:
+    """Persistence diagram for one source (pred or gt) on *ax*."""
+    lo, hi = lim
+    ax.plot([lo, hi], [lo, hi], "k--", lw=0.8, alpha=0.5)
+    for pairs, color in [(b0_pairs, _B0_COLOR), (b1_pairs, _B1_COLOR)]:
+        finite = [(b, d) for b, d in pairs if d < np.inf]
+        if finite:
+            bs, ds = zip(*finite)
+            ax.scatter(bs, ds, c=color, s=15, alpha=0.7)
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_xlabel("Birth (filtration)")
+    ax.set_ylabel("Death (filtration)")
+
+
+import numpy as np
+
+
+def _plot_barcode_axis(
+    ax,
+    b0_pairs: list[tuple[float, float]],
+    b1_pairs: list[tuple[float, float]],
+    xlim: tuple[float, float],
+    max_bar_height: float = 0.02,   # maximum bar thickness
+    bar_step: float = 0.035,        # spacing between bars within a group
+    margin: float = 0.04,           # padding from top/bottom
+) -> None:
+    # finite pairs, sorted by persistence descending
+    b0 = sorted([(b, d) for b, d in b0_pairs if np.isfinite(d)],
+                key=lambda p: p[1] - p[0], reverse=True)
+    b1 = sorted([(b, d) for b, d in b1_pairs if np.isfinite(d)],
+                key=lambda p: p[1] - p[0], reverse=True)
+
+    # normalize vertical axis so groups can "stick" to edges
+    ax.set_ylim(0.0, 1.0)
+
+    # β1: bottom-up
+    y1_start = margin + max_bar_height / 2.0
+    for i, (b, d) in enumerate(b1):
+        y = y1_start + i * bar_step
+        if y + max_bar_height / 2.0 > 1.0:
+            # avoid drawing outside of axis
+            break
+        ax.barh(y, d - b, left=b, height=max_bar_height, color=_B1_COLOR)
+
+    # β0: top-down
+    y0_start = 1.0 - margin - max_bar_height / 2.0
+    for i, (b, d) in enumerate(b0):
+        y = y0_start - i * bar_step
+        if y - max_bar_height / 2.0 < 0.0:
+            # avoid drawing outside of axis
+            break
+        ax.barh(y, d - b, left=b, height=max_bar_height, color=_B0_COLOR)
+
+    lo, hi = xlim
+    ax.set_xlim(lo, hi)
+    ax.set_xlabel("Filtration value")
+    ax.set_yticks([])
+
+
+def _add_figure_legend(fig: plt.Figure, is_sdt: bool = False) -> None:
+    fig.legend(handles=_LEGEND_HANDLES, loc="upper center", ncol=2,
+               bbox_to_anchor=(0.5, 1.05 if not is_sdt else 1.05), frameon=True, fontsize=8)
+
+
+def _save_raw_persistence_plot(
+    pred_b0: list, pred_b1: list,
+    patch_name: str,
+    save_path: Path,
+) -> None:
+    """RAW: 1×2 — prediction PD | prediction barcode.
+
+    Axes fixed at [-0.05, 1.05]. GT is not shown.
+    """
+    lim = (-0.05, 1.05)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig.suptitle(patch_name)
+    _plot_pd_axis(axes[0], pred_b0, pred_b1, lim)
+    _plot_barcode_axis(axes[1], pred_b0, pred_b1, lim)
+    _add_figure_legend(fig)
+    fig.savefig(save_path, bbox_inches="tight", dpi=150)
+    plt.close(fig)
+
+
+def _save_sdt_persistence_plot(
+    pred_b0: list, pred_b1: list,
+    gt_b0: list, gt_b1: list,
+    patch_name: str,
+    save_path: Path,
+) -> None:
+    """SDT: 2×2 — row 0: pred PD | pred barcode; row 1: GT PD | GT barcode.
+
+    Axes limits computed dynamically from the data.
+    """
+    lim = _dynamic_lim([pred_b0, pred_b1, gt_b0, gt_b1])
+    fig = plt.figure(figsize=(12, 10))
+    fig.suptitle(patch_name, y=1.02)
+    subfigs = fig.subfigures(2, 1, hspace=0.02)
+
+    subfigs[0].suptitle("Prediction", fontweight="bold")
+    ax_pred = subfigs[0].subplots(1, 2)
+    _plot_pd_axis(ax_pred[0], pred_b0, pred_b1, lim)
+    _plot_barcode_axis(ax_pred[1], pred_b0, pred_b1, lim)
+
+    subfigs[1].suptitle("Ground Truth", fontweight="bold")
+    ax_gt = subfigs[1].subplots(1, 2)
+    _plot_pd_axis(ax_gt[0], gt_b0, gt_b1, lim)
+    _plot_barcode_axis(ax_gt[1], gt_b0, gt_b1, lim)
+
+    _add_figure_legend(fig, is_sdt=True)
+    fig.savefig(save_path, bbox_inches="tight", dpi=150)
+    plt.close(fig)
+
+
+def _save_persistence_diagrams(
+    raw_b0_pred: list,
+    raw_b1_pred: list,
+    sdt_b0_pred: list, sdt_b0_gt: list,
+    sdt_b1_pred: list, sdt_b1_gt: list,
+    run_dir: Path,
+    patch_name: str,
+) -> None:
+    """Save two persistence-diagram figures into *run_dir*.
+
+    Files: ``{patch_name}_raw.png`` (1×2, probability map, fixed [0,1] limits),
+           ``{patch_name}_sdt.png`` (1×4, SDT map, dynamic limits).
+    """
+    _save_raw_persistence_plot(
+        raw_b0_pred, raw_b1_pred,
+        patch_name, run_dir / f"{patch_name}_raw.png",
+    )
+    _save_sdt_persistence_plot(
+        sdt_b0_pred, sdt_b1_pred, sdt_b0_gt, sdt_b1_gt,
+        patch_name, run_dir / f"{patch_name}_sdt.png",
+    )
+
+
 @torch.no_grad()
 def collect_patch_metrics_and_betti(
     model,
     loader,
     device,
     run_name: str,
+    save_pd_dir: Path | None = None,
 ) -> tuple:
     """Run batched patch-level inference once, computing both segmentation
     metrics and per-patch persistence diagram data
@@ -168,6 +332,9 @@ def collect_patch_metrics_and_betti(
         Torch device
     run_name:
         Model/run identifier
+    save_pd_dir:
+        When provided, a 2×2 persistence-diagram figure is saved per patch as
+        ``<run_name>_<patch_stem>_persistence.png`` in this directory.
 
     Returns
     -------
@@ -183,12 +350,24 @@ def collect_patch_metrics_and_betti(
                            (raw_b0_wd, raw_b0_bn, raw_b1_wd, raw_b1_bn,
                             sdt_b0_wd, sdt_b0_bn, sdt_b1_wd, sdt_b1_bn)
     """
+    run_dir = None
+    if save_pd_dir is not None:
+        run_dir = save_pd_dir
+        run_dir.mkdir(parents=True, exist_ok=True)
+    print(
+        f"Save persistence diagrams to: {run_dir}" if run_dir else "Not saving persistence diagrams.")
+
     dice_s, iou_s, clDice_s, tprec_s, tsens_s = [], [], [], [], []
     pp_dice_s, pp_iou_s, pp_clDice_s, pp_tprec_s, pp_tsens_s = [], [], [], [], []
     raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows = [], [], [], []
     pd_distance_rows = []
 
+    batch_count = 0
     for images, gt_masks, _, patch_names in loader:
+        if batch_count == 2:
+            break
+        batch_count += 1
+
         batch_size = images.shape[0]
         input_list = get_batched_input_list(images.to(device))
         outputs = model(batched_input=input_list, multimask_output=False)
@@ -212,9 +391,6 @@ def collect_patch_metrics_and_betti(
             gt = gt_masks[i]
             pred = output_masks[i]
             pp_pred = pp_masks[i]
-
-            print(
-                f"gt mask dim: {gt.shape}, pred mask dim: {pred.shape}, pp_pred mask dim: {pp_pred.shape}")
 
             # Segmentation metrics
             d, iou, cl, tp, ts = compute_metrics(pred, gt)
@@ -248,7 +424,8 @@ def collect_patch_metrics_and_betti(
                 raw_b1_rows.append({"model": run_name, "image": patch_name,
                                     "type": "groundtruth", "birth": birth, "death": death})
 
-            # persistence diagrams on signed distance transform (SDT) maps calculated from binary masks
+            # persistence diagrams on signed distance transform (SDT) maps,
+            # calculated from binary (prediction, ground truth) masks
             pred_sdt_b0, pred_sdt_b1 = get_sdt_persistence_pairs(pred)
             gt_sdt_b0, gt_sdt_b1 = get_sdt_persistence_pairs(gt)
 
@@ -287,6 +464,16 @@ def collect_patch_metrics_and_betti(
                 "sdt_b1_bottleneck": sdt_b1_bn,
             })
 
+            if run_dir is not None:
+                _save_persistence_diagrams(
+                    pred_b0_pairs,
+                    pred_b1_pairs,
+                    pred_sdt_b0, gt_sdt_b0,
+                    pred_sdt_b1, gt_sdt_b1,
+                    run_dir,
+                    patch_name,
+                )
+
     mean_metrics_raw = (
         float(np.mean(dice_s)), float(
             np.mean(iou_s)), float(np.mean(clDice_s)),
@@ -321,26 +508,25 @@ def get_persistence_pairs_from_filtration(
     filtration: np.ndarray,
     threshold: float,
 ) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
-    """Compute cubical persistence pairs for a given filtration array.
-
-    Pairs with persistence (death - birth) below *threshold* are discarded.
-    """
     cc = gd.CubicalComplex(
         dimensions=filtration.shape,
         top_dimensional_cells=filtration.flatten(),
     )
     cc.compute_persistence()
-    b0_pairs = [(float(b), float(d))
+
+    max_val = float(filtration.max())
+
+    b0_pairs = [(float(b), min(float(d), max_val))
                 for b, d in cc.persistence_intervals_in_dimension(0)
-                if (float(d) - float(b)) >= threshold]
-    b1_pairs = [(float(b), float(d))
+                if (min(float(d), max_val) - float(b)) >= threshold]
+    b1_pairs = [(float(b), min(float(d), max_val))
                 for b, d in cc.persistence_intervals_in_dimension(1)
-                if (float(d) - float(b)) >= threshold]
+                if (min(float(d), max_val) - float(b)) >= threshold]
     return b0_pairs, b1_pairs
 
 
 def get_persistence_pairs(
-    prob_map: torch,
+    prob_map: torch.Tensor,
 ) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
     """Compute cubical persistence pairs for a probability map.
 
@@ -374,7 +560,7 @@ def get_sdt_persistence_pairs(mask: torch.Tensor) -> tuple[list[tuple[float, flo
 
     Parameters
     ----------
-    binary_mask:
+    mask:
         mask tensor of shape (1, H, W) or (H, W)
 
     Returns
@@ -403,8 +589,8 @@ def compute_persistence_distances(
     -------
     (wasserstein_dist, bottleneck_dist)
     """
-    pred_finite = [(b, d) for b, d in pred_pairs if d < np.inf]
-    gt_finite = [(b, d) for b, d in gt_pairs if d < np.inf]
+    pred_finite = [(b, d) for b, d in pred_pairs]
+    gt_finite = [(b, d) for b, d in gt_pairs]
     pred_arr = np.array(pred_finite, dtype=float)
     gt_arr = np.array(gt_finite, dtype=float)
     try:

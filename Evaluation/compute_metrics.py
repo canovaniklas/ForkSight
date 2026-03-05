@@ -30,8 +30,6 @@ import torch
 from torch.utils.data import DataLoader
 import wandb
 
-# make the repo root importable
-_EVAL_DIR = Path(__file__).resolve().parent
 
 import Segmentation.SAM.sam_lora_util as sam_lora_util
 import Segmentation.Util.env_utils as env_utils
@@ -52,14 +50,14 @@ MODELS_RUNS = ["SAM_LoRA_Finetuning_20260219_150640",
 PARAMS_ARTIFACT_SUFFIX = "_params_minloss:v0"
 
 
-def _collect_combined(model, test_img_dir, test_mask_dir, downsample_size, device, batch_size, run_name):
+def _collect_combined(model, test_img_dir, test_mask_dir, downsample_size, device, batch_size, run_name, save_pd_dir=None):
     """Run patch-level inference once per batch, returning segmentation metrics
     and per-patch persistence diagram rows.
     """
     dataset = sam_lora_util.SegmentationDataset(
         test_img_dir, test_mask_dir, downsample_size=downsample_size, return_img_name=True)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-    return collect_patch_metrics_and_betti(model, loader, device, run_name)
+    return collect_patch_metrics_and_betti(model, loader, device, run_name, save_pd_dir=save_pd_dir)
 
 
 def main():
@@ -84,6 +82,7 @@ def main():
     torch.cuda.manual_seed_all(SEED)
 
     DATASETS_DIR = os.getenv("DATASETS_DIR")
+    EVALUATION_OUTPUT_DIR = os.getenv("EVALUATION_OUTPUT_DIR")
     HIGHRES_IMG_PATCHES_DIR_NAME = os.getenv(
         "HIGHRES_IMG_PATCHES_DIR_NAME", "img_patches_1024")
     HIGHRES_MASK_PATCHES_DIR_NAME = os.getenv(
@@ -93,23 +92,31 @@ def main():
 
     if DATASETS_DIR is None:
         raise ValueError("DATASETS_DIR environment variable must be set.")
+    if EVALUATION_OUTPUT_DIR is None:
+        raise ValueError(
+            "EVALUATION_OUTPUT_DIR environment variable must be set.")
 
     device = torch.device(
         f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _EVAL_DIR = Path(EVALUATION_OUTPUT_DIR) / timestamp
+    _CSV_DIR = _EVAL_DIR / "csv"
+    _CSV_DIR.mkdir(parents=True, exist_ok=True)
+
     df_prev_metrics = load_latest_metrics_csv(
-        _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
+        _CSV_DIR) if not args.force_recompute else pd.DataFrame()
     df_prev_raw_b0 = load_latest_persistence_raw_b0_csv(
-        _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
+        _CSV_DIR) if not args.force_recompute else pd.DataFrame()
     df_prev_raw_b1 = load_latest_persistence_raw_b1_csv(
-        _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
+        _CSV_DIR) if not args.force_recompute else pd.DataFrame()
     df_prev_sdt_b0 = load_latest_persistence_sdt_b0_csv(
-        _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
+        _CSV_DIR) if not args.force_recompute else pd.DataFrame()
     df_prev_sdt_b1 = load_latest_persistence_sdt_b1_csv(
-        _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
+        _CSV_DIR) if not args.force_recompute else pd.DataFrame()
     df_prev_dist = load_latest_persistence_distances_csv(
-        _EVAL_DIR) if not args.force_recompute else pd.DataFrame()
+        _CSV_DIR) if not args.force_recompute else pd.DataFrame()
     computed_models = set(
         df_prev_metrics.index) if not df_prev_metrics.empty else set()
 
@@ -181,7 +188,8 @@ def main():
             (raw_b0_wd, raw_b0_bn, raw_b1_wd, raw_b1_bn,
              sdt_b0_wd, sdt_b0_bn, sdt_b1_wd, sdt_b1_bn) = \
             _collect_combined(model, test_img_dir, test_mask_dir,
-                              downsample_size, device, args.batch_size, run.name)
+                              downsample_size, device, args.batch_size, run.name,
+                              save_pd_dir=_EVAL_DIR / f"persistence_{run.name}")
 
         all_raw_b0_rows.extend(raw_b0_rows)
         all_raw_b1_rows.extend(raw_b1_rows)
@@ -213,8 +221,6 @@ def main():
         del model, params
         torch.cuda.empty_cache()
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
     # metrics CSV
     df_new_metrics = pd.DataFrame(metrics_results).T
     df_new_metrics.index.name = "Model"
@@ -225,7 +231,7 @@ def main():
     elif df_new_metrics.empty:
         df_new_metrics = df_prev_metrics
 
-    metrics_path = _EVAL_DIR / f"metrics_{timestamp}.csv"
+    metrics_path = _CSV_DIR / "metrics.csv"
     df_new_metrics.to_csv(metrics_path)
     print(f"\n  Saved metrics to:\t\t\t{metrics_path}")
 
@@ -244,7 +250,7 @@ def main():
         elif df_new.empty:
             df_new = df_prev
         if not df_new.empty:
-            path = _EVAL_DIR / f"{stem}_{timestamp}.csv"
+            path = _CSV_DIR / f"{stem}.csv"
             df_new.to_csv(path, index=False)
             print(f"  Saved persistence diagrams to:\t{path}")
 

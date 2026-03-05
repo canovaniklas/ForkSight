@@ -9,4 +9,6 @@ wandb/
 
 Segmentation/Data/*
 *.png
+
 *.csv
+!persistencetest.csv
