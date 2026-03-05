@@ -32,6 +32,9 @@ set +a
 # activate virtual environment (SAM_LORA_VENV is set by .env above)
 source "$SAM_LORA_VENV/bin/activate"
 
+# name the W&B run after the SLURM job so wandb matches the cluster view
+export WANDB_NAME="${SLURM_JOB_NAME}-${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID:-0}"
+
 # W&B dirs on scratch (fast, not backed up — suitable for run artifacts)
 export WANDB_DIR="/scratch/jhehli/wandb"
 export WANDB_CACHE_DIR="/scratch/jhehli/wandb_cache"

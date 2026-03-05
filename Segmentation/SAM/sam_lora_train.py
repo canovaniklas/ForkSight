@@ -525,7 +525,7 @@ def train_evaluate():
         wandb_run = wandb.init(
             entity=WANDB_ENTITY,
             project=WANDB_PROJECT,
-            name=f"SAM_LoRA_Finetuning_{RUN_DATETIME_STR}",
+            name=os.environ.get("WANDB_NAME", f"SAM_LoRA_Finetuning_{RUN_DATETIME_STR}"),
         )
 
         # --- Step 1: If sweep run, override globals from sweep-sampled config ---
