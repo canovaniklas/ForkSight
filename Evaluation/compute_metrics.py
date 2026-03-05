@@ -44,7 +44,7 @@ from Evaluation.evaluation_util import (
     load_latest_persistence_distances_csv,
 )
 
-MODELS_RUNS = ["SAM_LoRA_Finetuning_20260219_150640",
+MODELS_RUNS = [#"SAM_LoRA_Finetuning_20260219_150640",
                "SAM_LoRA_Finetuning_20260224_154858"]
 
 PARAMS_ARTIFACT_SUFFIX = "_params_minloss:v0"
@@ -252,7 +252,7 @@ def main():
         if not df_new.empty:
             path = _CSV_DIR / f"{stem}.csv"
             df_new.to_csv(path, index=False)
-            print(f"  Saved persistence diagrams to:\t{path}")
+            print(f"  Saved persistence data to:\t{path}")
 
     print("\nDone.")
 

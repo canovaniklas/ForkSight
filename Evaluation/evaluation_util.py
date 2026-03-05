@@ -197,35 +197,43 @@ def _plot_barcode_axis(
     b1_pairs: list[tuple[float, float]],
     xlim: tuple[float, float],
     max_bar_height: float = 0.02,   # maximum bar thickness
-    bar_step: float = 0.035,        # spacing between bars within a group
+    bar_step: float = 0.035,        # preferred spacing between bar centres
     margin: float = 0.04,           # padding from top/bottom
 ) -> None:
     # finite pairs, sorted by persistence descending
     b0 = sorted([(b, d) for b, d in b0_pairs if np.isfinite(d)],
-                key=lambda p: p[1] - p[0], reverse=True)
+                key=lambda p: (p[0], -(p[1] - p[0])))
     b1 = sorted([(b, d) for b, d in b1_pairs if np.isfinite(d)],
-                key=lambda p: p[1] - p[0], reverse=True)
+                key=lambda p: (p[1], -(p[1] - p[0])))
 
     # normalize vertical axis so groups can "stick" to edges
     ax.set_ylim(0.0, 1.0)
 
+    # each group occupies one half of the axis minus the margin
+    available = 0.5 - margin
+    fill_ratio = max_bar_height / bar_step  # preserve height-to-step ratio
+
+    def _group_geometry(n: int) -> tuple[float, float]:
+        """Return (step, height) for a group of n bars."""
+        if n == 0:
+            return bar_step, max_bar_height
+        step = available / n if n * bar_step > available else bar_step
+        return step, min(max_bar_height, step * fill_ratio)
+
+    step1, height1 = _group_geometry(len(b1))
+    step0, height0 = _group_geometry(len(b0))
+
     # β1: bottom-up
-    y1_start = margin + max_bar_height / 2.0
+    y1_start = margin + height1 / 2.0
     for i, (b, d) in enumerate(b1):
-        y = y1_start + i * bar_step
-        if y + max_bar_height / 2.0 > 1.0:
-            # avoid drawing outside of axis
-            break
-        ax.barh(y, d - b, left=b, height=max_bar_height, color=_B1_COLOR)
+        ax.barh(y1_start + i * step1, d - b, left=b,
+                height=height1, color=_B1_COLOR)
 
     # β0: top-down
-    y0_start = 1.0 - margin - max_bar_height / 2.0
+    y0_start = 1.0 - margin - height0 / 2.0
     for i, (b, d) in enumerate(b0):
-        y = y0_start - i * bar_step
-        if y - max_bar_height / 2.0 < 0.0:
-            # avoid drawing outside of axis
-            break
-        ax.barh(y, d - b, left=b, height=max_bar_height, color=_B0_COLOR)
+        ax.barh(y0_start - i * step0, d - b, left=b,
+                height=height0, color=_B0_COLOR)
 
     lo, hi = xlim
     ax.set_xlim(lo, hi)
