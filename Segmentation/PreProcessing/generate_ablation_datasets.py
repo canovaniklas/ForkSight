@@ -19,7 +19,6 @@ SEED = load_as("SEED", int, 42)
 
 RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
 DATASETS_DIR = os.getenv("DATASETS_DIR")
-DATASET_NAME = os.getenv("DATASET_NAME", "Segmentation_v1")
 
 HIGHRES_IMG_DIR_NAME = os.getenv("HIGHRES_IMG_DIR_NAME", "images_4096")
 HIGHRES_MASK_DIR_NAME = os.getenv("HIGHRES_MASK_DIR_NAME", "masks_4096")
@@ -44,6 +43,9 @@ DATASET_VAL_SPLIT = load_as("DATASET_VAL_SPLIT", float, "0.2")
 if not RAW_DATA_DIR or not DATASETS_DIR:
     raise ValueError(
         "RAW_DATA_DIR and DATASETS_DIR environment variables must be set.")
+
+ABLATION_DATASET_BASE_NAME = "Ablation_Dataset"
+SHARED_SPLIT_NAME = f"{ABLATION_DATASET_BASE_NAME}_shared"
 
 # ABLATION_DATASETS: dataset configurations, as percentages of raw/augmented images relative to the number of raw training images
 # Examples:
@@ -71,10 +73,45 @@ ABLATION_DATASETS: list[tuple[float, float]] = [
 def _dataset_name(pct_raw: float, pct_aug: float) -> str:
     raw_pct = int(round(pct_raw * 100))
     aug_pct = int(round(pct_aug * 100))
-    return f"{DATASET_NAME}_ablation_raw{raw_pct}_aug{aug_pct}"
+    return f"{ABLATION_DATASET_BASE_NAME}_raw{raw_pct}_aug{aug_pct}"
 
 
-def generate_ablation_dataset(pct_raw: float, pct_aug: float):
+def generate_shared_splits() -> Path:
+    """Generate val and test sets once, shared across all ablation datasets"""
+    raw_images_dir = Path(RAW_DATA_DIR) / HIGHRES_IMG_DIR_NAME
+    raw_masks_dir = Path(RAW_DATA_DIR) / HIGHRES_MASK_DIR_NAME
+
+    shared_dir = Path(DATASETS_DIR) / SHARED_SPLIT_NAME
+    init_dir(shared_dir)
+
+    _, val_paths, test_paths = get_train_val_test_split_paths(
+        raw_images_dir, ABLATION_DATASET_BASE_NAME, DATASET_VAL_SPLIT, SEED
+    )
+
+    print(f"\n{'=' * 60}")
+    print(f"Generating shared splits: {SHARED_SPLIT_NAME}")
+    print(f"  val images:  {len(val_paths)}")
+    print(f"  test images: {len(test_paths)}")
+    print(f"{'=' * 60}\n")
+
+    for split_dir, paths in [
+        (shared_dir / "validation", val_paths),
+        (shared_dir / "test", test_paths),
+    ]:
+        (split_dir / HIGHRES_IMG_DIR_NAME).mkdir(parents=True, exist_ok=True)
+        (split_dir / HIGHRES_MASK_DIR_NAME).mkdir(parents=True, exist_ok=True)
+        for png_path in paths:
+            img_tensor = load_png_as_tensor(png_path)
+            mask_tensor = load_png_as_tensor(raw_masks_dir / png_path.name)
+            save_tensor_as_png(img_tensor, mask_tensor, png_path,
+                               split_dir / HIGHRES_IMG_DIR_NAME,
+                               split_dir / HIGHRES_MASK_DIR_NAME,
+                               None)
+
+    return shared_dir
+
+
+def generate_ablation_dataset(pct_raw: float, pct_aug: float, shared_dir: Path):
     assert 0.0 <= pct_raw <= 1.0, "pct_raw must be in [0, 1]"
     assert pct_aug >= 0.0, "pct_aug must be >= 0"
 
@@ -91,17 +128,20 @@ def generate_ablation_dataset(pct_raw: float, pct_aug: float):
 
     dataset_dir = Path(DATASETS_DIR) / ablation_name
     train_dir = dataset_dir / "train"
-    val_dir = dataset_dir / "validation"
-    test_dir = dataset_dir / "test"
 
     init_dir(dataset_dir)
-    for split_dir in [train_dir, val_dir, test_dir]:
-        (split_dir / HIGHRES_IMG_DIR_NAME).mkdir(parents=True, exist_ok=True)
-        (split_dir / HIGHRES_MASK_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    (train_dir / HIGHRES_IMG_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    (train_dir / HIGHRES_MASK_DIR_NAME).mkdir(parents=True, exist_ok=True)
     (train_dir / HIGHRES_HEATMAP_DIR_NAME).mkdir(parents=True, exist_ok=True)
 
-    all_train_paths, val_paths, test_paths = get_train_val_test_split_paths(
-        raw_images_dir, DATASET_NAME, DATASET_VAL_SPLIT, SEED
+    # Symlink validation and test into the shared splits folder
+    for split in ["validation", "test"]:
+        link = dataset_dir / split
+        target = shared_dir / split
+        link.symlink_to(target, target_is_directory=True)
+
+    all_train_paths, _, _ = get_train_val_test_split_paths(
+        raw_images_dir, ABLATION_DATASET_BASE_NAME, DATASET_VAL_SPLIT, SEED
     )
 
     # Sample raw images for train
@@ -140,8 +180,6 @@ def generate_ablation_dataset(pct_raw: float, pct_aug: float):
 
     print(f"Train raw images:       {len(sampled_train_paths)}")
     print(f"Train augmented images: {len(aug_assignments)}")
-    print(f"Val raw images:         {len(val_paths)}")
-    print(f"Test images:            {len(test_paths)}")
     print()
 
     # Save raw train images
@@ -178,28 +216,34 @@ def generate_ablation_dataset(pct_raw: float, pct_aug: float):
         save_heatmap(hm_aug, png_path, train_dir /
                      HIGHRES_HEATMAP_DIR_NAME, aug_type)
 
-    # Save val and test images (raw only, no augmentation)
-    for base_dir, paths in [(val_dir, val_paths), (test_dir, test_paths)]:
-        for png_path in paths:
-            img_tensor = load_png_as_tensor(png_path)
-            mask_tensor = load_png_as_tensor(raw_masks_dir / png_path.name)
-            save_tensor_as_png(img_tensor, mask_tensor, png_path,
-                               base_dir / HIGHRES_IMG_DIR_NAME,
-                               base_dir / HIGHRES_MASK_DIR_NAME,
-                               None)
-
     return dataset_dir
 
 
 def main():
     set_seeds(SEED)
 
+    # Generate val and test once into a shared folder
+    shared_dir = generate_shared_splits()
+    create_patches_and_save(
+        shared_dir,
+        HIGHRES_IMG_DIR_NAME, HIGHRES_MASK_DIR_NAME, HIGHRES_HEATMAP_DIR_NAME,
+        HIGHRES_IMG_PATCHES_DIR_NAME, HIGHRES_MASK_PATCHES_DIR_NAME, HIGHRES_HEATMAP_PATCHES_DIR_NAME,
+        splits=["validation", "test"],
+    )
+    remove_highres_dirs(
+        shared_dir,
+        HIGHRES_IMG_DIR_NAME, HIGHRES_MASK_DIR_NAME, HIGHRES_HEATMAP_DIR_NAME,
+        splits=["validation", "test"],
+    )
+
     for pct_raw, pct_aug in ABLATION_DATASETS:
-        dataset_dir = generate_ablation_dataset(pct_raw, pct_aug)
+        dataset_dir = generate_ablation_dataset(pct_raw, pct_aug, shared_dir)
+        # Only process train split, val/test are symlinks into the shared folder
         create_patches_and_save(
             dataset_dir,
             HIGHRES_IMG_DIR_NAME, HIGHRES_MASK_DIR_NAME, HIGHRES_HEATMAP_DIR_NAME,
             HIGHRES_IMG_PATCHES_DIR_NAME, HIGHRES_MASK_PATCHES_DIR_NAME, HIGHRES_HEATMAP_PATCHES_DIR_NAME,
+            splits=["train"],
         )
         if DATASET_OVERSAMPLE_JUNCTION_PATCHES > 0:
             oversample_junction_patches(
@@ -211,6 +255,7 @@ def main():
         remove_highres_dirs(
             dataset_dir,
             HIGHRES_IMG_DIR_NAME, HIGHRES_MASK_DIR_NAME, HIGHRES_HEATMAP_DIR_NAME,
+            splits=["train"],
         )
 
 
