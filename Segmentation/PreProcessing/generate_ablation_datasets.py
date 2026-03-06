@@ -73,7 +73,7 @@ ABLATION_DATASETS: list[tuple[float, float]] = [
 def _dataset_name(pct_raw: float, pct_aug: float) -> str:
     raw_pct = int(round(pct_raw * 100))
     aug_pct = int(round(pct_aug * 100))
-    return f"{ABLATION_DATASET_BASE_NAME}_raw{raw_pct}_aug{aug_pct}"
+    return f"{ABLATION_DATASET_BASE_NAME}_Raw{raw_pct}_Aug{aug_pct}"
 
 
 def generate_shared_splits() -> Path:
@@ -111,11 +111,11 @@ def generate_shared_splits() -> Path:
     return shared_dir
 
 
-def generate_ablation_dataset(pct_raw: float, pct_aug: float, shared_dir: Path):
+def generate_ablation_dataset(pct_raw: float, pct_aug: float, shared_dir: Path, name_override: str | None = None):
     assert 0.0 <= pct_raw <= 1.0, "pct_raw must be in [0, 1]"
     assert pct_aug >= 0.0, "pct_aug must be >= 0"
 
-    ablation_name = _dataset_name(pct_raw, pct_aug)
+    ablation_name = name_override or _dataset_name(pct_raw, pct_aug)
     print(f"\n{'=' * 60}")
     print(f"Generating: {ablation_name}")
     print(f"  pct_raw={pct_raw}, pct_aug={pct_aug}")
@@ -238,19 +238,40 @@ def main():
 
     for pct_raw, pct_aug in ABLATION_DATASETS:
         dataset_dir = generate_ablation_dataset(pct_raw, pct_aug, shared_dir)
-        # Only process train split, val/test are symlinks into the shared folder
+        # Only process train split; val/test are symlinks into the shared folder.
+        # No junction oversampling for percentage-based ablation datasets.
         create_patches_and_save(
             dataset_dir,
             HIGHRES_IMG_DIR_NAME, HIGHRES_MASK_DIR_NAME, HIGHRES_HEATMAP_DIR_NAME,
             HIGHRES_IMG_PATCHES_DIR_NAME, HIGHRES_MASK_PATCHES_DIR_NAME, HIGHRES_HEATMAP_PATCHES_DIR_NAME,
             splits=["train"],
         )
-        if DATASET_OVERSAMPLE_JUNCTION_PATCHES > 0:
+        remove_highres_dirs(
+            dataset_dir,
+            HIGHRES_IMG_DIR_NAME, HIGHRES_MASK_DIR_NAME, HIGHRES_HEATMAP_DIR_NAME,
+            splits=["train"],
+        )
+
+    # Full datasets: all raw images + all augmentation types (N = len(AUG_TYPES) per image)
+    for name, oversample_count in [
+        (f"{ABLATION_DATASET_BASE_NAME}_Full", 0),
+        (f"{ABLATION_DATASET_BASE_NAME}_Full_JunctionsOversampled", 1),
+    ]:
+        dataset_dir = generate_ablation_dataset(
+            pct_raw=1.0, pct_aug=float(len(AUG_TYPES)), shared_dir=shared_dir, name_override=name,
+        )
+        create_patches_and_save(
+            dataset_dir,
+            HIGHRES_IMG_DIR_NAME, HIGHRES_MASK_DIR_NAME, HIGHRES_HEATMAP_DIR_NAME,
+            HIGHRES_IMG_PATCHES_DIR_NAME, HIGHRES_MASK_PATCHES_DIR_NAME, HIGHRES_HEATMAP_PATCHES_DIR_NAME,
+            splits=["train"],
+        )
+        if oversample_count > 0:
             oversample_junction_patches(
                 dataset_dir,
                 HIGHRES_IMG_DIR_NAME, HIGHRES_MASK_DIR_NAME, HIGHRES_HEATMAP_DIR_NAME,
                 HIGHRES_IMG_PATCHES_DIR_NAME, HIGHRES_MASK_PATCHES_DIR_NAME, HIGHRES_HEATMAP_PATCHES_DIR_NAME,
-                DATASET_OVERSAMPLE_JUNCTION_PATCHES,
+                oversample_count,
             )
         remove_highres_dirs(
             dataset_dir,
