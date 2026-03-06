@@ -1,10 +1,10 @@
 import os
 from pathlib import Path
 from PIL import Image
-import shutil
 import numpy as np
 from typing import Optional, Tuple
 
+from Segmentation.PreProcessing.preprocessing_utils import init_dir
 from Segmentation.Util.env_utils import load_segmentation_env
 
 load_segmentation_env()
@@ -57,12 +57,6 @@ IN_IMAGES = [
     ("Z:\\imcrdata\\2025_Veronica_Lamin\\2024_Veronica_Lamin\\2024_Veronica_Lamin_R1\\20240606_Veronica_Sample1\\LayersData\\highmag\\Tile Set (11)\\Tile_011-005-000000_0-000.tif", (752, 1508)),
     ("Z:\\imcrdata\\2025_Veronica_Lamin\\2025_Veronica_G9ai\\R1\\20250409_Veronica_Apple\\LayersData\\highmag\\Tile Set (12)\\Tile_009-012-000000_0-000.tif", (205, 1547))
 ]
-
-
-def init_folder(folder_path: Path):
-    if folder_path.exists():
-        shutil.rmtree(folder_path)
-    folder_path.mkdir(parents=True, exist_ok=True)
 
 
 def get_exp_dir_name(img_path: Path) -> str:
@@ -121,7 +115,7 @@ def main():
         raise RuntimeError("RAW_DATA_DIR environment variable not set")
 
     out_dir_path = Path(RAW_DATA_DIR) / HIGHRES_IMG_DIR_NAME
-    init_folder(out_dir_path)
+    init_dir(out_dir_path)
 
     total_images = 0
 
@@ -145,6 +139,7 @@ def main():
             print(f"Failed to convert {img_path}: {e}")
 
     print(f"Created {total_images} PNG images")
+
 
 if __name__ == "__main__":
     main()
