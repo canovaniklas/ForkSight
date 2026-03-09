@@ -5,7 +5,6 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=40G
 #SBATCH --time=10:00:00
-#SBATCH --export=NONE
 #SBATCH --output=/scratch/jhehli/logs/%x-%A_%a.out
 #SBATCH --error=/scratch/jhehli/logs/%x-%A_%a.err
 
@@ -15,6 +14,8 @@
 #       Segmentation/SAM/sweep_wandb_agent_job.sh
 
 set -euo pipefail
+
+module load cuda/12.9.1
 
 : "${SWEEP_PATH:?SWEEP_PATH env var is required (entity/project/sweep_id)}"
 
