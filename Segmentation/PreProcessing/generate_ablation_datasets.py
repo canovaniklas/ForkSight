@@ -1,3 +1,4 @@
+import argparse
 import os
 import random
 from pathlib import Path
@@ -36,8 +37,6 @@ DATASET_GAMMA_RANGE = load_as_tuple("DATASET_GAMMA_RANGE", "0.6,1.4", float)
 DATASET_MAX_DISTORT = load_as("DATASET_MAX_DISTORT", float, "0.1")
 DATASET_DISTORT_GRID_SIZE = load_as_tuple(
     "DATASET_DISTORT_GRID_SIZE", "4,4", int)
-DATASET_OVERSAMPLE_JUNCTION_PATCHES = load_as(
-    "DATASET_OVERSAMPLE_JUNCTION_PATCHES", int, 0)
 DATASET_VAL_SPLIT = load_as("DATASET_VAL_SPLIT", float, "0.2")
 
 if not RAW_DATA_DIR or not DATASETS_DIR:
@@ -48,12 +47,11 @@ ABLATION_DATASET_BASE_NAME = "Ablation_Dataset"
 SHARED_SPLIT_NAME = f"{ABLATION_DATASET_BASE_NAME}_shared"
 
 # ABLATION_DATASETS: dataset configurations, as percentages of raw/augmented images relative to the number of raw training images
+#                    additionally, generates two full datasets with all raw images + all augmentations, with and without junction oversampling
 # Examples:
 #   (1.0, 0.0): all training images, no augmentation
 #   (1.0, 1.0): all training images + equal number of augmented images
 #   (0.5, 0.5): 50% raw, 50% augmented (augmented only from the 50% raw)
-#   (0.0, 1.0): no raw images, only augmented (sources randomly sampled but not included)
-#
 # The validation and test sets are always kept complete and unaugmented
 ABLATION_DATASETS: list[tuple[float, float]] = [
     # no scaling, keep dataset size = raw train size
@@ -63,7 +61,6 @@ ABLATION_DATASETS: list[tuple[float, float]] = [
     (0.25, 0.75),               # 25% raw + 75% augmented
 
     # scaling: increase dataset size over original raw train size
-    (1.0, 0.5),                 # 100% raw + 50% augmented (1.5x size)
     (1.0, 1.0),                 # 100% raw + 100% augmented (2x size)
     (1.0, 2.0),                 # 100% raw + 200% augmented (3x size)
     (1.0, 4.0),                 # 100% raw + 400% augmented (5x size)
@@ -153,13 +150,7 @@ def generate_ablation_dataset(pct_raw: float, pct_aug: float, shared_dir: Path, 
     # a) pct_aug < pct_raw : randomly select a subset of sampled raw images, each gets 1 random aug
     # b) pct_aug == pct_raw: each sampled raw image gets exactly 1 random aug
     # c) pct_aug > pct_raw : N = pct_aug/pct_raw (integer), each sampled raw image gets N different augmentations
-    # d) pct_raw == 0      : sample sources randomly from all train images (not included in dataset)
-    if pct_raw == 0:
-        # Case d)
-        n_aug = int(round(pct_aug * len(all_train_paths)))
-        all_pairs = [(p, a) for p in all_train_paths for a in AUG_TYPES]
-        aug_assignments = rng.sample(all_pairs, min(n_aug, len(all_pairs)))
-    elif pct_aug == 0:
+    if pct_aug == 0:
         aug_assignments = []
     elif pct_aug <= pct_raw:
         # Cases a), b): each source gets exactly one aug; sources sampled without replacement
@@ -219,7 +210,7 @@ def generate_ablation_dataset(pct_raw: float, pct_aug: float, shared_dir: Path, 
     return dataset_dir
 
 
-def main():
+def generate_ablation_datasets():
     set_seeds(SEED)
 
     # Generate val and test once into a shared folder
@@ -278,6 +269,55 @@ def main():
             HIGHRES_IMG_DIR_NAME, HIGHRES_MASK_DIR_NAME, HIGHRES_HEATMAP_DIR_NAME,
             splits=["train"],
         )
+
+
+def fix_75_25_dataset():
+    """With the current implementation and seed, somehow the raw 75%, aug 25% dataset has 81 instead of 66 images, 
+    so remove 15 random aug images to get the 75/25 ratio and 264 total patches
+    """
+    print("\nFixing the 75% raw + 25% aug dataset to have exactly 75% raw and 25% augmented patches")
+
+    dataset_dir = Path(DATASETS_DIR) / _dataset_name(0.75, 0.25)
+    train_img_patches_dir = dataset_dir / "train" / HIGHRES_IMG_PATCHES_DIR_NAME
+    train_mask_patches_dir = dataset_dir / "train" / HIGHRES_MASK_PATCHES_DIR_NAME
+    train_hm_patches_dir = dataset_dir / "train" / HIGHRES_HEATMAP_PATCHES_DIR_NAME
+
+    all_aug_patches = sorted([p for p in train_img_patches_dir.glob(
+        '*.png') if any(aug in p.name for aug in AUG_TYPES)])
+    print(
+        f"Found {len(all_aug_patches)} augmented patches in the 75% raw + 25% aug dataset")
+
+    rng = random.Random(SEED)
+    patches_to_remove = rng.sample(all_aug_patches, len(all_aug_patches) - 66)
+    print(
+        f"Removing {len(patches_to_remove)} randomly selected augmented patches to fix the dataset size to 66")
+
+    for patch_path in patches_to_remove:
+        mask_patch_path = train_mask_patches_dir / patch_path.name
+        hm_patch_path = train_hm_patches_dir / \
+            patch_path.with_suffix('.npy').name
+
+        patch_path.unlink()
+        mask_patch_path.unlink()
+        hm_patch_path.unlink()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--fix_75_25", type=int, default=0,
+                        help="Generate datasets (0), fix the 75% raw + 25% aug dataset (1), do both (2)")
+    args = parser.parse_args()
+
+    if args.fix_75_25 == 0:
+        generate_ablation_datasets()
+    elif args.fix_75_25 == 1:
+        fix_75_25_dataset()
+    elif args.fix_75_25 == 2:
+        generate_ablation_datasets()
+        fix_75_25_dataset()
+    else:
+        raise ValueError("Invalid value for --fix_75_25. Must be 0 or 1.")
 
 
 if __name__ == "__main__":

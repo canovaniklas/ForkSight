@@ -28,7 +28,7 @@ def load_png_as_tensor(path: Path) -> torch.Tensor:
 def init_dir(dir_path: Path):
     if dir_path.exists():
         shutil.rmtree(dir_path)
-    dir_path.mkdir(parents=True, exist_ok=True)
+    dir_path.mkdir(parents=True)
 
 
 def grid_distort(
@@ -202,6 +202,7 @@ def get_train_val_test_split_paths(
     dataset_name: str,
     val_split: float,
     seed: int,
+
 ) -> tuple[list[Path], list[Path], list[Path]]:
     splits = load_dataset_split(dataset_name)
     assert splits is not None, f"dataset_splits.json doesn't contain split for '{dataset_name}'"
@@ -210,13 +211,23 @@ def get_train_val_test_split_paths(
     train_paths = sorted([raw_images_dir / n for n in splits["train"]])
     test_paths = sorted([raw_images_dir / n for n in splits["test"]])
 
-    rng = random.Random(seed)
-    rng.shuffle(train_paths)
-    val_count = int(round(val_split * len(train_paths)))
-    val_paths = train_paths[:val_count]
-    train_paths = train_paths[val_count:]
+    train_paths_full = [
+        p for p in train_paths if not p.name.endswith("_soi.png")]
+    train_paths_soi = [p for p in train_paths if p.name.endswith("_soi.png")]
 
-    return train_paths, val_paths, test_paths
+    rng = random.Random(seed)
+    rng.shuffle(train_paths_full)
+    val_count_full = int(round(val_split * len(train_paths_full)))
+    val_paths_full = train_paths_full[:val_count_full]
+    train_paths_full = train_paths_full[val_count_full:]
+
+    rng = random.Random(seed)
+    rng.shuffle(train_paths_soi)
+    val_count_soi = int(round(val_split * len(train_paths_soi)))
+    val_paths_soi = train_paths_soi[:val_count_soi]
+    train_paths_soi = train_paths_soi[val_count_soi:]
+
+    return train_paths_full + train_paths_soi, val_paths_full + val_paths_soi, test_paths
 
 
 def create_patches_from_npy(npy_path: Path, patch_size: int = 1024) -> list[np.ndarray]:
