@@ -17,7 +17,7 @@ from PIL import Image
 import torch
 
 from Environment.env_utils import load_as, load_forksight_env
-from Segmentation.PreProcessing.dataset_util import parse_junction_annotations_xml
+from Segmentation.PreProcessing.General.preprocessing_util import parse_junction_annotations_xml
 
 load_forksight_env()
 

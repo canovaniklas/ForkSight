@@ -4,7 +4,7 @@ from PIL import Image
 import numpy as np
 from typing import Optional, Tuple
 
-from Segmentation.PreProcessing.SAM.preprocessing_utils import init_dir
+from Segmentation.PreProcessing.SAM.sam_preprocessing_util import init_dir
 from Environment.env_utils import load_forksight_env
 
 load_forksight_env()

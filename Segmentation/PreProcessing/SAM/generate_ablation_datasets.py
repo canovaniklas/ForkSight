@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from Environment.env_utils import load_as, load_as_tuple, load_forksight_env
-from Segmentation.PreProcessing.SAM.preprocessing_utils import (
+from Segmentation.PreProcessing.SAM.sam_preprocessing_util import (
     set_seeds, load_png_as_tensor, init_dir,
     save_tensor_as_png, save_heatmap,
     AUG_TYPES, apply_augmentation, get_train_val_test_split_paths,

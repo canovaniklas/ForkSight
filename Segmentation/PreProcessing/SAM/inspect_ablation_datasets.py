@@ -3,8 +3,8 @@ import re
 from pathlib import Path
 
 from Environment.env_utils import load_as, load_forksight_env
-from Segmentation.PreProcessing.generate_ablation_datasets import ABLATION_DATASET_BASE_NAME
-from Segmentation.PreProcessing.SAM.preprocessing_utils import AUG_TYPES, load_dataset_split
+from Segmentation.PreProcessing.SAM.generate_ablation_datasets import ABLATION_DATASET_BASE_NAME
+from Segmentation.PreProcessing.SAM.sam_preprocessing_util import AUG_TYPES, load_dataset_split
 
 
 load_forksight_env()

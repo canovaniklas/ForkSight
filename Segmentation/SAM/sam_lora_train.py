@@ -15,7 +15,7 @@ import ast
 from Segmentation.SAM.sam_lora import SamLoRA
 from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, SegmentationDataset, evaluate_model, get_batched_input_list
 from Environment.env_utils import load_as, load_as_bool, load_forksight_env
-from Segmentation.PreProcessing.dataset_util import get_base_images
+from Segmentation.PreProcessing.General.preprocessing_util import get_base_images
 
 load_forksight_env()
 
