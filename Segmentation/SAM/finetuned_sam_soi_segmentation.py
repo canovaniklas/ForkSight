@@ -7,9 +7,9 @@ import wandb
 import torchvision.transforms as transforms
 
 from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, get_batched_input_list, get_params_from_artifact, initialize_sam_lora_with_params
-from Environment.env_utils import load_segmentation_env, load_as
+from Environment.env_utils import load_forksight_env, load_as
 
-load_segmentation_env()
+load_forksight_env()
 
 SEED = load_as("SEED", int, 42)
 

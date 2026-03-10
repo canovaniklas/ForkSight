@@ -5,9 +5,9 @@ from pathlib import Path
 import numpy as np
 from scipy.ndimage import label
 
-from Environment.env_utils import load_segmentation_env
+from Environment.env_utils import load_forksight_env
 
-load_segmentation_env()
+load_forksight_env()
 
 RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
 HIGHRES_IMG_DIR_NAME = os.getenv("HIGHRES_IMG_DIR_NAME", "images_4096")

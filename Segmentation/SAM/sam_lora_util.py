@@ -15,10 +15,10 @@ import numpy as np
 from topolosses.losses import HutopoLoss
 
 from Segmentation.SAM.sam_lora import SamLoRA
-from Environment.env_utils import load_segmentation_env
+from Environment.env_utils import load_forksight_env
 from Evaluation.evaluation_util import compute_metrics as _eval_compute_metrics
 
-load_segmentation_env()
+load_forksight_env()
 
 MODEL_CHECKPOINTS_DIR = os.getenv("MODEL_CHECKPOINTS_DIR")
 

@@ -1,9 +1,9 @@
 import os
 import wandb
 from pathlib import Path
-from Environment.env_utils import load_segmentation_env
+from Environment.env_utils import load_forksight_env
 
-load_segmentation_env()
+load_forksight_env()
 
 MODEL_OUT_DIR = os.getenv("MODEL_OUT_DIR")
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")

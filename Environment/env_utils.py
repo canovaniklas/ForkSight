@@ -11,7 +11,7 @@ def find_repo_root() -> Path:
     raise RuntimeError("No repo root ('.git' folder) found")
 
 
-def load_segmentation_env():
+def load_forksight_env():
     repo_root = find_repo_root()
     env_path = repo_root / "Environment" / ".env"
     if env_path.exists():

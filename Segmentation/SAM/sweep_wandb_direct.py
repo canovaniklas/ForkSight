@@ -22,7 +22,7 @@ def main() -> None:
         Path(f"wandb/sweep-{sweep_id}").mkdir(parents=True, exist_ok=True)
 
     # Import training module after the agent has set WANDB_RUN_ID / WANDB_SWEEP_ID.
-    # load_segmentation_env() runs at module level inside sam_lora_train — the base
+    # load_forksight_env() runs at module level inside sam_lora_train — the base
     # .env was already sourced by the SLURM job script before this process started.
     from Segmentation.SAM import sam_lora_train as T
 

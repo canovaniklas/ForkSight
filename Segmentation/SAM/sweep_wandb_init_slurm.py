@@ -19,9 +19,9 @@ sweep values automatically override the env-var defaults with no duplicates.
 
 import os
 import wandb
-from Environment.env_utils import load_segmentation_env
+from Environment.env_utils import load_forksight_env
 
-load_segmentation_env()
+load_forksight_env()
 
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
 WANDB_PROJECT = os.getenv("WANDB_PROJECT", "ForkSight-SAM")

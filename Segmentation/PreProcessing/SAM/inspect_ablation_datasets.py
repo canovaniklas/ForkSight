@@ -2,12 +2,12 @@ import os
 import re
 from pathlib import Path
 
-from Environment.env_utils import load_as, load_segmentation_env
+from Environment.env_utils import load_as, load_forksight_env
 from Segmentation.PreProcessing.generate_ablation_datasets import ABLATION_DATASET_BASE_NAME
-from Segmentation.PreProcessing.preprocessing_utils import AUG_TYPES, load_dataset_split
+from Segmentation.PreProcessing.SAM.preprocessing_utils import AUG_TYPES, load_dataset_split
 
 
-load_segmentation_env()
+load_forksight_env()
 
 DATASETS_DIR = os.getenv("DATASETS_DIR")
 RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")

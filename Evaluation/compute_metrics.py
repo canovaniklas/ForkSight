@@ -73,7 +73,7 @@ def main():
                         help="dataset for evaluation, replaces run dataset if provided")
     args = parser.parse_args()
 
-    env_utils.load_segmentation_env()
+    env_utils.load_forksight_env()
 
     SEED = env_utils.load_as("SEED", int, 42)
     random.seed(SEED)

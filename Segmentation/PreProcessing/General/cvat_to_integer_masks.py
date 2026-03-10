@@ -4,9 +4,9 @@ from PIL import Image
 import numpy as np
 import shutil
 
-from Environment.env_utils import load_as_bool, load_as_tuple, load_segmentation_env
+from Environment.env_utils import load_as_bool, load_as_tuple, load_forksight_env
 
-load_segmentation_env()
+load_forksight_env()
 
 RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
 CVAT_DIR_NAME = os.getenv("CVAT_DIR_NAME", "cvat")

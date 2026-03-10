@@ -9,7 +9,7 @@ from huggingface_hub import login
 
 
 sys.path.append(os.path.abspath(".."))
-from Environment.env_utils import load_segmentation_env
+from Environment.env_utils import load_forksight_env
 
 print(sys.executable, sys.version_info)
 assert sys.version_info.major == 3 and sys.version_info.minor == 12, "Python version does not match the expected version."
@@ -20,7 +20,7 @@ import sam3
 from sam3.model_builder import build_sam3_image_model
 from sam3.model.sam3_image_processor import Sam3Processor
 
-load_segmentation_env()
+load_forksight_env()
 
 RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
 HIGHRES_IMG_DIR_NAME = os.getenv("HIGHRES_IMG_DIR_NAME", "images_4096")

@@ -4,10 +4,10 @@ from PIL import Image
 import numpy as np
 from typing import Optional, Tuple
 
-from Segmentation.PreProcessing.preprocessing_utils import init_dir
-from Environment.env_utils import load_segmentation_env
+from Segmentation.PreProcessing.SAM.preprocessing_utils import init_dir
+from Environment.env_utils import load_forksight_env
 
-load_segmentation_env()
+load_forksight_env()
 
 RAW_DATA_DIR = os.getenv("RAW_DATA_DIR")
 HIGHRES_IMG_DIR_NAME = os.getenv("HIGHRES_IMG_DIR_NAME", "images_4096")
