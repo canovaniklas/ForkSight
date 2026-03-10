@@ -317,7 +317,7 @@ def main():
         generate_ablation_datasets()
         fix_75_25_dataset()
     else:
-        raise ValueError("Invalid value for --fix_75_25. Must be 0 or 1.")
+        raise ValueError("Invalid value for --fix_75_25. Must be in [0, 1, 2]")
 
 
 if __name__ == "__main__":
