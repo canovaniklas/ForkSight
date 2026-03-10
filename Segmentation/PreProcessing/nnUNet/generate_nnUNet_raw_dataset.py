@@ -1,7 +1,10 @@
+import argparse
 import json
 import os
+import random
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torchvision.transforms.functional as F
 from PIL import Image
@@ -28,6 +31,7 @@ if not Path(RAW_DATA_DIR).exists() or not Path(NNUNET_RAW_DIR).exists():
         f"RAW_DATA_DIR ({RAW_DATA_DIR}) and NNUNET_RAW_DIR ({NNUNET_RAW_DIR}) must be valid directories.")
 
 _SPLITS_FILE = Path(__file__).resolve().parent / "nnUNet_dataset_splits.json"
+_DATASET_DIR_NAME = f"Dataset{NNUNET_DATASET_ID:03d}_{NNUNET_DATASET_NAME}"
 
 
 def load_split(dataset_name: str) -> dict[str, list[str]]:
@@ -117,6 +121,46 @@ def save_cases(
     return case_idx
 
 
+def inspect_masks():
+    """Plot 9 random image/mask pairs from the generated dataset to verify mask quality."""
+    dataset_dir = Path(NNUNET_RAW_DIR) / _DATASET_DIR_NAME
+    images_tr_dir = dataset_dir / "imagesTr"
+    labels_tr_dir = dataset_dir / "labelsTr"
+
+    all_cases = sorted(labels_tr_dir.glob("*.png"))
+
+    sample = random.sample(all_cases, min(9, len(all_cases)))
+    cols = 3
+    rows = (len(sample) + cols - 1) // cols
+
+    fig, axes = plt.subplots(rows, cols * 2, figsize=(cols * 2 * 4, rows * 4))
+    axes = axes.flatten()
+
+    for i, mask_path in enumerate(sample):
+        case_name = mask_path.stem
+        img_path = images_tr_dir / f"{case_name}_0000.png"
+
+        img = np.array(Image.open(img_path))
+        mask = np.array(Image.open(mask_path))  # values 0 or 1
+
+        ax_img = axes[i * 2]
+        ax_mask = axes[i * 2 + 1]
+
+        ax_img.imshow(img, cmap="gray")
+        ax_img.set_title(case_name, fontsize=7)
+        ax_img.axis("off")
+
+        ax_mask.imshow(mask, cmap="hot", vmin=0, vmax=1)
+        ax_mask.set_title(f"{case_name} (mask)", fontsize=7)
+        ax_mask.axis("off")
+
+    for ax in axes[len(sample) * 2:]:
+        ax.axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+
 def generate_dataset():
     raw_data_dir = Path(RAW_DATA_DIR)
     images_dir = raw_data_dir / HIGHRES_IMG_DIR_NAME
@@ -131,8 +175,7 @@ def generate_dataset():
     test_paths = sorted(p for p in images_dir.glob(
         "*.png") if p.name in test_names)
 
-    dataset_dir_name = f"Dataset{NNUNET_DATASET_ID:03d}_{NNUNET_DATASET_NAME}"
-    dataset_dir = Path(NNUNET_RAW_DIR) / dataset_dir_name
+    dataset_dir = Path(NNUNET_RAW_DIR) / _DATASET_DIR_NAME
 
     images_tr_dir = dataset_dir / "imagesTr"
     labels_tr_dir = dataset_dir / "labelsTr"
@@ -173,7 +216,7 @@ def generate_dataset():
         json.dump(mapping, f, indent=4)
 
     print(
-        f"\nDataset '{dataset_dir_name}' created with {num_training} training cases "
+        f"\nDataset '{_DATASET_DIR_NAME}' created with {num_training} training cases "
         f"and {num_test} test cases."
     )
     print(f"dataset.json written to {dataset_dir / 'dataset.json'}")
@@ -181,4 +224,11 @@ def generate_dataset():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--verify", default=None, type=bool,
+                        help="Verify the generated dataset")
+    args = parser.parse_args()
+
     generate_dataset()
+    if args.verify:
+        inspect_masks()
