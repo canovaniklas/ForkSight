@@ -1,5 +1,6 @@
 import re
 from pathlib import Path
+import shutil
 from PIL import Image
 import torchvision.transforms.functional as F
 import torch
@@ -25,7 +26,7 @@ def get_base_images(imgs_dir: Path, exclude_soi_images: bool = True) -> list[str
 
     base_image_paths_lst = list(base_image_paths)
     base_image_paths_lst.sort()
-    
+
     return base_image_paths_lst
 
 
@@ -65,3 +66,9 @@ def parse_junction_annotations_xml(xml_path: str) -> Dict[str, List[Tuple[float,
             points_per_image[image_name] = points
 
     return points_per_image
+
+
+def init_dir(dir_path: Path):
+    if dir_path.exists():
+        shutil.rmtree(dir_path)
+    dir_path.mkdir(parents=True)

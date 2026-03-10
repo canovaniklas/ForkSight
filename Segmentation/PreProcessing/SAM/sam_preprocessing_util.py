@@ -10,7 +10,7 @@ import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
 from scipy.ndimage import label, center_of_mass
 
-from Segmentation.PreProcessing.General.preprocessing_util import create_patches_from_img
+from Segmentation.PreProcessing.General.preprocessing_util import create_patches_from_img, init_dir
 
 
 def set_seeds(seed: int):
@@ -23,12 +23,6 @@ def set_seeds(seed: int):
 def load_png_as_tensor(path: Path) -> torch.Tensor:
     img = Image.open(path)
     return transforms.ToTensor()(img)
-
-
-def init_dir(dir_path: Path):
-    if dir_path.exists():
-        shutil.rmtree(dir_path)
-    dir_path.mkdir(parents=True)
 
 
 def grid_distort(
@@ -191,7 +185,7 @@ def apply_augmentation(
 
 
 def load_dataset_split(dataset_name: str) -> dict[str, list[str]] | None:
-    splits_file = Path(__file__).resolve().parent / "dataset_splits.json"
+    splits_file = Path(__file__).resolve().parent / "sam_dataset_splits.json"
     with open(splits_file, "r") as f:
         splits = json.load(f)
     return splits.get(dataset_name)
@@ -205,7 +199,7 @@ def get_train_val_test_split_paths(
 
 ) -> tuple[list[Path], list[Path], list[Path]]:
     splits = load_dataset_split(dataset_name)
-    assert splits is not None, f"dataset_splits.json doesn't contain split for '{dataset_name}'"
+    assert splits is not None, f"sam_dataset_splits.json doesn't contain split for '{dataset_name}'"
     assert 0.0 <= val_split < 1.0, "val_split must be in [0, 1)"
 
     train_paths = sorted([raw_images_dir / n for n in splits["train"]])

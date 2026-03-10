@@ -6,12 +6,13 @@ import torch
 
 from Environment.env_utils import load_as, load_as_tuple, load_forksight_env
 from Segmentation.PreProcessing.SAM.sam_preprocessing_util import (
-    set_seeds, load_png_as_tensor, init_dir,
+    set_seeds, load_png_as_tensor,
     save_tensor_as_png, save_heatmap, visualize_heatmap,
     get_all_augmentations, get_train_val_test_split_paths,
     create_patches_and_save,
     oversample_junction_patches, remove_highres_dirs,
 )
+from Segmentation.PreProcessing.General.preprocessing_util import init_dir
 
 load_forksight_env()
 
