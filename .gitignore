@@ -8,7 +8,7 @@ wandb/
 *.pt
 
 Segmentation/Data/*
+JunctionDetection/Data/*
 *.png
-
 *.csv
 !persistencetest.csv

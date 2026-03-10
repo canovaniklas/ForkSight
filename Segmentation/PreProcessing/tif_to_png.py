@@ -5,7 +5,7 @@ import numpy as np
 from typing import Optional, Tuple
 
 from Segmentation.PreProcessing.preprocessing_utils import init_dir
-from Segmentation.Util.env_utils import load_segmentation_env
+from Environment.env_utils import load_segmentation_env
 
 load_segmentation_env()
 

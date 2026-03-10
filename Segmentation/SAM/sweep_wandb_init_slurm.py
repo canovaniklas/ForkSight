@@ -19,7 +19,7 @@ sweep values automatically override the env-var defaults with no duplicates.
 
 import os
 import wandb
-from Segmentation.Util.env_utils import load_segmentation_env
+from Environment.env_utils import load_segmentation_env
 
 load_segmentation_env()
 

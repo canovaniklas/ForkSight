@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import torch
 
-from Segmentation.Util.env_utils import load_as, load_segmentation_env
+from Environment.env_utils import load_as, load_segmentation_env
 from Segmentation.Util.dataset_util import parse_junction_annotations_xml
 
 load_segmentation_env()

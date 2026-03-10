@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from Segmentation.Util.env_utils import load_as, load_as_tuple, load_segmentation_env
+from Environment.env_utils import load_as, load_as_tuple, load_segmentation_env
 from Segmentation.PreProcessing.preprocessing_utils import (
     set_seeds, load_png_as_tensor, init_dir,
     save_tensor_as_png, save_heatmap, visualize_heatmap,

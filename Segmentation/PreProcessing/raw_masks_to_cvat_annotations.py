@@ -15,7 +15,7 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 
-from Segmentation.Util.env_utils import load_as_tuple, load_segmentation_env
+from Environment.env_utils import load_as_tuple, load_segmentation_env
 
 load_segmentation_env()
 

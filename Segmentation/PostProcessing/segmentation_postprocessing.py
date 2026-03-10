@@ -3,7 +3,7 @@ import numpy as np
 import torch.nn.functional as F
 from scipy.ndimage import label, generate_binary_structure
 
-from Segmentation.Util.env_utils import load_as, load_as_bool, load_segmentation_env
+from Environment.env_utils import load_as, load_as_bool, load_segmentation_env
 
 load_segmentation_env()
 

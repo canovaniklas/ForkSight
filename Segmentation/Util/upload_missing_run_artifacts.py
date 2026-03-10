@@ -1,7 +1,7 @@
 import os
 import wandb
 from pathlib import Path
-from Segmentation.Util.env_utils import load_segmentation_env
+from Environment.env_utils import load_segmentation_env
 
 load_segmentation_env()
 

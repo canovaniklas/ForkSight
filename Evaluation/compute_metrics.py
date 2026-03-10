@@ -32,7 +32,7 @@ import wandb
 
 
 import Segmentation.SAM.sam_lora_util as sam_lora_util
-import Segmentation.Util.env_utils as env_utils
+import Environment.env_utils as env_utils
 
 from Evaluation.evaluation_util import (
     collect_patch_metrics_and_betti,

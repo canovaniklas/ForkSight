@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from scipy.ndimage import label
 
-from Segmentation.Util.env_utils import load_segmentation_env
+from Environment.env_utils import load_segmentation_env
 
 load_segmentation_env()
 

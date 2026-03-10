@@ -14,7 +14,7 @@ import ast
 
 from Segmentation.SAM.sam_lora import SamLoRA
 from Segmentation.SAM.sam_lora_util import EVALUATED_TAG, CombinedLoss, SegmentationDataset, evaluate_model, get_batched_input_list
-from Segmentation.Util.env_utils import load_as, load_as_bool, load_segmentation_env
+from Environment.env_utils import load_as, load_as_bool, load_segmentation_env
 from Segmentation.Util.dataset_util import get_base_images
 
 load_segmentation_env()
