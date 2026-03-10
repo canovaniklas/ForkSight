@@ -10,7 +10,7 @@ import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
 from scipy.ndimage import label, center_of_mass
 
-from Segmentation.Util.dataset_util import create_patches_from_img
+from Segmentation.PreProcessing.dataset_util import create_patches_from_img
 
 
 def set_seeds(seed: int):
