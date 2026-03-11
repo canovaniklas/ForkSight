@@ -36,7 +36,7 @@ HIGHRES_HEATMAP_PATCHES_DIR_NAME = os.getenv(
 
 USE_WANDB = load_as_bool("USE_WANDB", True)
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
-WANDB_PROJECT = os.getenv("WANDB_PROJECT", "ForkSight-SAM")
+WANDB_SAM_PROJECT = os.getenv("WANDB_SAM_PROJECT", "ForkSight-SAM")
 WANDB_API_KEY = os.getenv("WANDB_API_KEY")
 
 SAM_LORA_FINETUNE_IMAGE_ENCODER = load_as_bool(
@@ -524,7 +524,7 @@ def train_evaluate():
         # *before* we touch it — we read those out below.
         wandb_run = wandb.init(
             entity=WANDB_ENTITY,
-            project=WANDB_PROJECT,
+            project=WANDB_SAM_PROJECT,
             name=os.environ.get("WANDB_NAME", f"SAM_LoRA_Finetuning_{RUN_DATETIME_STR}"),
         )
 

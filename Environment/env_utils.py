@@ -3,22 +3,26 @@ from dotenv import load_dotenv
 from pathlib import Path
 
 
-def find_repo_root() -> Path:
+def get_env_file() -> Path:
     start = Path(__file__).resolve()
+    repo_root = None
     for parent in [start] + list(start.parents):
         if (parent / ".git").exists():
-            return parent
-    raise RuntimeError("No repo root ('.git' folder) found")
+            repo_root = parent
+            break
+    if repo_root is None:
+        raise RuntimeError("No repo root ('.git' folder) found")
+    env_path = repo_root / "Environment" / ".env"
+    if not env_path.exists():
+        raise FileNotFoundError(
+            f"Warning: .env file not found at expected location: {env_path}")
+    return env_path
 
 
 def load_forksight_env():
-    repo_root = find_repo_root()
-    env_path = repo_root / "Environment" / ".env"
-    if env_path.exists():
-        load_dotenv(dotenv_path=env_path, override=False)
-        print(f"loaded environment variables from: {env_path}")
-    else:
-        print(f".env file not found: {env_path} — using defaults")
+    env_path = get_env_file()
+    load_dotenv(dotenv_path=env_path, override=False)
+    print(f"loaded environment variables from: {env_path}")
 
 
 def load_as_tuple(var: str, default=None, dtype=int) -> tuple:

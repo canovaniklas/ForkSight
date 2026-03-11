@@ -19,12 +19,12 @@ FINETUNED_SAM_OUTPUT_DIR_NAME = os.getenv(
     "FINETUNED_SAM_OUTPUT_DIR_NAME", "finetuned_sam_output")
 
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
-WANDB_PROJECT = os.getenv("WANDB_PROJECT", "ForkSight-SAM")
+WANDB_SAM_PROJECT = os.getenv("WANDB_SAM_PROJECT", "ForkSight-SAM")
 
 
 def init_finetuned_sam_model(device: torch.device):
     runs = [run for run in list(wandb.Api().runs(
-        f"{WANDB_ENTITY}/{WANDB_PROJECT}")) if EVALUATED_TAG in run.tags and run.state == "finished"]
+        f"{WANDB_ENTITY}/{WANDB_SAM_PROJECT}")) if EVALUATED_TAG in run.tags and run.state == "finished"]
     for i, run in enumerate(runs):
         print(f"({i}) {run.name}")
     run_idx = int(input("Enter the index of the run to evaluate: "))

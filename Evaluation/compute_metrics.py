@@ -88,7 +88,7 @@ def main():
     HIGHRES_MASK_PATCHES_DIR_NAME = os.getenv(
         "HIGHRES_MASK_PATCHES_DIR_NAME", "mask_patches_1024")
     WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
-    WANDB_PROJECT = os.getenv("WANDB_PROJECT", "ForkSight-SAM")
+    WANDB_SAM_PROJECT = os.getenv("WANDB_SAM_PROJECT", "ForkSight-SAM")
 
     if DATASETS_DIR is None:
         raise ValueError("DATASETS_DIR environment variable must be set.")
@@ -121,7 +121,7 @@ def main():
         df_prev_metrics.index) if not df_prev_metrics.empty else set()
 
     api = wandb.Api()
-    all_runs = list(api.runs(f"{WANDB_ENTITY}/{WANDB_PROJECT}"))
+    all_runs = list(api.runs(f"{WANDB_ENTITY}/{WANDB_SAM_PROJECT}"))
     runs_to_eval = [
         r for r in all_runs
         if sam_lora_util.EVALUATED_TAG in r.tags

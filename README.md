@@ -38,7 +38,7 @@ The table below lists all required environment variables to run dataset preparat
 | DATASET_SAVE_HEATMAP_VISUALIZATIONS       | If true, save visualizations of junction weighting heatmaps as PNG images                            |
 | USE_WANDB                        | Enables or disables Weights & Biases tracking              |
 | WANDB_ENTITY                     | W&B team, should be EM_IMCR_BIOVSION                                      |
-| WANDB_PROJECT                    | W&B project name                                           |
+| WANDB_SAM_PROJECT                    | W&B project name                                           |
 | WANDB_API_KEY                    | API key for W&B (keep private)                             |
 | SAM_LORA_VENV                    | Virtual environment path for SAM LoRA finetuning                   |
 | SAM_LORA_FINETUNE_IMAGE_ENCODER  | Whether to fine-tune the image encoder                     |

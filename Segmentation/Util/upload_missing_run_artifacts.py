@@ -7,7 +7,7 @@ load_forksight_env()
 
 MODEL_OUT_DIR = os.getenv("MODEL_OUT_DIR")
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
-WANDB_PROJECT = os.getenv("WANDB_PROJECT", "ForkSight-SAM")
+WANDB_SAM_PROJECT = os.getenv("WANDB_SAM_PROJECT", "ForkSight-SAM")
 
 if MODEL_OUT_DIR is None or not Path(MODEL_OUT_DIR).is_dir():
     raise ValueError(
@@ -32,7 +32,7 @@ def main():
         run_id = run_id_file.read_text().strip()
 
         try:
-            api_run = api.run(f"{WANDB_ENTITY}/{WANDB_PROJECT}/{run_id}")
+            api_run = api.run(f"{WANDB_ENTITY}/{WANDB_SAM_PROJECT}/{run_id}")
         except Exception as e:
             print(
                 f"    could not find run {run_id} via API: {e}, skipping and")
@@ -57,7 +57,7 @@ def main():
             try:
                 sdk_run = wandb.init(
                     entity=WANDB_ENTITY,
-                    project=WANDB_PROJECT,
+                    project=WANDB_SAM_PROJECT,
                     id=run_id,
                     resume="allow",
                     reinit='finish_previous',

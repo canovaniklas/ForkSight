@@ -24,7 +24,7 @@ from Environment.env_utils import load_forksight_env
 load_forksight_env()
 
 WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
-WANDB_PROJECT = os.getenv("WANDB_PROJECT", "ForkSight-SAM")
+WANDB_SAM_PROJECT = os.getenv("WANDB_SAM_PROJECT", "ForkSight-SAM")
 WANDB_API_KEY = os.getenv("WANDB_API_KEY")
 
 # Shared search space, identical across both sweeps.
@@ -160,18 +160,18 @@ def main():
     wandb.login(key=WANDB_API_KEY)
 
     sweep_id_cldice_lora = wandb.sweep(
-        CLDICE_LORA_SWEEP, entity=WANDB_ENTITY, project=WANDB_PROJECT)
+        CLDICE_LORA_SWEEP, entity=WANDB_ENTITY, project=WANDB_SAM_PROJECT)
     sweep_id_cldice_n_blocks = wandb.sweep(
-        CLDICE_N_BLOCKS_SWEEP, entity=WANDB_ENTITY, project=WANDB_PROJECT)
+        CLDICE_N_BLOCKS_SWEEP, entity=WANDB_ENTITY, project=WANDB_SAM_PROJECT)
     sweep_id_skel_lora = wandb.sweep(
-        SKELETON_RECALL_LORA_SWEEP, entity=WANDB_ENTITY, project=WANDB_PROJECT)
+        SKELETON_RECALL_LORA_SWEEP, entity=WANDB_ENTITY, project=WANDB_SAM_PROJECT)
     sweep_id_skel_n_blocks = wandb.sweep(
-        SKELETON_RECALL_N_BLOCKS_SWEEP, entity=WANDB_ENTITY, project=WANDB_PROJECT)
+        SKELETON_RECALL_N_BLOCKS_SWEEP, entity=WANDB_ENTITY, project=WANDB_SAM_PROJECT)
 
-    path_cldice_lora = f"{WANDB_ENTITY}/{WANDB_PROJECT}/{sweep_id_cldice_lora}"
-    path_cldice_n_blocks = f"{WANDB_ENTITY}/{WANDB_PROJECT}/{sweep_id_cldice_n_blocks}"
-    path_skel_lora = f"{WANDB_ENTITY}/{WANDB_PROJECT}/{sweep_id_skel_lora}"
-    path_skel_n_blocks = f"{WANDB_ENTITY}/{WANDB_PROJECT}/{sweep_id_skel_n_blocks}"
+    path_cldice_lora = f"{WANDB_ENTITY}/{WANDB_SAM_PROJECT}/{sweep_id_cldice_lora}"
+    path_cldice_n_blocks = f"{WANDB_ENTITY}/{WANDB_SAM_PROJECT}/{sweep_id_cldice_n_blocks}"
+    path_skel_lora = f"{WANDB_ENTITY}/{WANDB_SAM_PROJECT}/{sweep_id_skel_lora}"
+    path_skel_n_blocks = f"{WANDB_ENTITY}/{WANDB_SAM_PROJECT}/{sweep_id_skel_n_blocks}"
 
     print("\n" + "=" * 65)
     print("Sweeps registered successfully.")
@@ -195,7 +195,7 @@ def main():
     print("     <num_later_waves>: number of subsequent waves (after the first wave)")
 
     print(
-        f"\nMonitor at: https://wandb.ai/{WANDB_ENTITY}/{WANDB_PROJECT}/sweeps\n")
+        f"\nMonitor at: https://wandb.ai/{WANDB_ENTITY}/{WANDB_SAM_PROJECT}/sweeps\n")
 
 
 if __name__ == "__main__":

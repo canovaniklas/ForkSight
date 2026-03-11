@@ -16,6 +16,8 @@ import os
 import re
 from pathlib import Path
 
+from Environment.env_utils import get_env_file
+
 
 def parse_env_file(filepath: str) -> list[str]:
     """Extract variable names from a .env file, preserving order."""
@@ -147,9 +149,6 @@ def main():
         description="Audit .env variables against README and codebase."
     )
     parser.add_argument(
-        "--env", default=None, help="Path to .env file (default: .env)"
-    )
-    parser.add_argument(
         "--readme", default=None, help="Path to README.md (default: README.md)"
     )
     parser.add_argument(
@@ -157,17 +156,19 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.env is None or args.readme is None or args.repo is None:
+    if args.readme is None or args.repo is None:
         raise ValueError(
-            "Error: --env, --readme, and --repo arguments are required.")
+            "Error: --readme, and --repo arguments are required.")
 
-    env_vars = parse_env_file(args.env)
+    env_file_path = get_env_file()
+
+    env_vars = parse_env_file(env_file_path)
     readme_vars = parse_readme_table(args.readme)
 
     env_set = set(env_vars)
     readme_set = set(readme_vars)
 
-    print(f"Found {len(env_set)} variable(s) in {args.env}")
+    print(f"Found {len(env_set)} variable(s) in {str(env_file_path)}")
     print(f"Found {len(readme_set)} variable(s) in {args.readme}")
 
     # 1. In .env but not in README
