@@ -14,9 +14,11 @@
 
 set -euo pipefail
 
-# SLURM batch jobs don't source ~/.bashrc by default —
-# we need it for nnUNet directory env vars (nnUNet_raw, nnUNet_preprocessed, nnUNet_results)
-source ~/.bashrc
+# export nnUNet dataset paths (nnUNet expects these env vars to be set)
+# .bashrc sets these but SLURM jobs don't load .bashrc, so we set them here explicitly
+export nnUNet_raw="/home/jhehli/data/datasets/nnUNet/nnUNet_raw"
+export nnUNet_preprocessed="/home/jhehli/data/datasets/nnUNet/nnUNet_preprocessed"
+export nnUNet_results="/home/jhehli/data/datasets/nnUNet/nnUNet_results"
 
 : "${FOLD:?FOLD env var is required (0-4)}"
 
