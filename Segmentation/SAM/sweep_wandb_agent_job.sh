@@ -15,8 +15,6 @@
 
 set -euo pipefail
 
-module load cuda/12.9.1
-
 : "${SWEEP_PATH:?SWEEP_PATH env var is required (entity/project/sweep_id)}"
 
 # go to repo root
@@ -27,7 +25,7 @@ echo "Job ${SLURM_JOB_ID}, array task ${SLURM_ARRAY_TASK_ID:-n/a} on $(hostname)
 
 # load base environment variables (.env sets SAM_LORA_VENV, WANDB_API_KEY, paths, etc.)
 set -a
-source ./Segmentation/.env
+source ./Environment/.env
 set +a
 
 # activate virtual environment (SAM_LORA_VENV is set by .env above)

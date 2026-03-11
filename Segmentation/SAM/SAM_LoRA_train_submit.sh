@@ -17,7 +17,7 @@ echo "Current working directory: $(pwd)"
 
 # load and export environment variables
 set -a
-source ./Segmentation/.env
+source ./Environment/.env
 set +a
 
 # apply any env var overrides passed as arguments (e.g. SAM_LORA_LR=0.0001)
