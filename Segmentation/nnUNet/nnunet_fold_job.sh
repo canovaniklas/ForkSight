@@ -10,7 +10,8 @@
 
 # Single nnUNet fold training job.
 # Expected env vars (passed via --export):
-#   FOLD  — the fold number (0-4)
+#   FOLD     — the fold number (0-4)
+#   TRAINER  — nnUNet trainer class (default: nnUNetTrainerWandb)
 
 set -euo pipefail
 
@@ -21,12 +22,14 @@ export nnUNet_preprocessed="/home/jhehli/data/datasets/nnUNet/nnUNet_preprocesse
 export nnUNet_results="/home/jhehli/data/datasets/nnUNet/nnUNet_results"
 
 : "${FOLD:?FOLD env var is required (0-4)}"
+TRAINER="${TRAINER:-nnUNetTrainerWandb}"
 
 REPO_ROOT="/home/jhehli/data/ForkSight"
 cd "$REPO_ROOT"
 
 echo "CWD: $(pwd)"
 echo "FOLD: ${FOLD}"
+echo "TRAINER: ${TRAINER}"
 echo "Job ${SLURM_JOB_ID} on $(hostname)"
 
 # load environment variables (sets NNUNET_DATASET_ID, paths, etc.)
@@ -41,4 +44,4 @@ source ~/.nnUNet_env/bin/activate
 
 mkdir -p "/scratch/jhehli/logs"
 
-nnUNetv2_train "$NNUNET_DATASET_ID" 2d "$FOLD" -tr nnUNetTrainerWandb --npz
+nnUNetv2_train "$NNUNET_DATASET_ID" 2d "$FOLD" -tr "$TRAINER" --npz
