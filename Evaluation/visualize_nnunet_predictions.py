@@ -72,7 +72,7 @@ def process_entry(
     patch = entry.get("patch") or None
     nnunet_case = entry["nnunet_case"]
 
-    img_path = find_file(images_dir, nnunet_case)
+    img_path = find_file(images_dir, f"{nnunet_case}_0000")
     if img_path is None:
         print(
             f"  [WARN] Original image not found for case '{nnunet_case}' in {images_dir}, skipping.")
@@ -141,7 +141,9 @@ def main():
     with open(args.mapping_json, "r") as f:
         mapping = json.load(f)
 
+    mapping = [e for e in mapping if e.get("split") == "test"]
     print(f"Processing {len(mapping)} entries...")
+
     for entry in mapping:
         process_entry(entry, args.images_dir, args.masks_dir, args.output_dir)
 
