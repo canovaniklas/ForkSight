@@ -318,6 +318,151 @@ def _save_persistence_diagrams(
     )
 
 
+# Shared helpers for patch-level metric / persistence accumulation            #
+def _setup_run_dir(save_pd_dir: Path | None) -> Path | None:
+    if save_pd_dir is None:
+        print("Not saving persistence diagrams.")
+        return None
+    save_pd_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Save persistence diagrams to: {save_pd_dir}")
+    return save_pd_dir
+
+
+def _make_accumulators() -> dict:
+    return {
+        "dice_s": [], "iou_s": [], "clDice_s": [], "tprec_s": [], "tsens_s": [],
+        "pp_dice_s": [], "pp_iou_s": [], "pp_clDice_s": [], "pp_tprec_s": [], "pp_tsens_s": [],
+        "raw_b0_rows": [], "raw_b1_rows": [],
+        "sdt_b0_rows": [], "sdt_b1_rows": [],
+        "pd_distance_rows": [],
+    }
+
+
+def _process_patch(
+    patch_name: str,
+    pred: torch.Tensor,
+    gt: torch.Tensor,
+    pp_pred: torch.Tensor,
+    prob_map: torch.Tensor,
+    run_name: str,
+    accum: dict,
+    run_dir: Path | None,
+) -> None:
+    """Compute metrics and persistence data for a single patch, appending
+    results into *accum* in-place.
+
+    Parameters
+    ----------
+    patch_name : identifier stored in each output row's ``image`` field.
+    pred       : (1, H, W) binary prediction.
+    gt         : (1, H, W) binary ground-truth.
+    pp_pred    : (1, H, W) post-processed prediction (small objects removed).
+    prob_map   : (1, H, W) soft probability map used for raw persistence.
+    run_name   : identifier stored in each output row's ``model`` field.
+    accum      : mutable accumulator dict created by ``_make_accumulators()``.
+    run_dir    : directory for persistence-diagram figures, or None.
+    """
+    # Segmentation metrics
+    d, iou, cl, tp, ts = compute_metrics(pred, gt)
+    accum["dice_s"].append(d.item())
+    accum["iou_s"].append(iou.item())
+    accum["clDice_s"].append(cl)
+    accum["tprec_s"].append(tp)
+    accum["tsens_s"].append(ts)
+
+    pp_d, pp_iou, pp_cl, pp_tp, pp_ts = compute_metrics(pp_pred, gt)
+    accum["pp_dice_s"].append(pp_d.item())
+    accum["pp_iou_s"].append(pp_iou.item())
+    accum["pp_clDice_s"].append(pp_cl)
+    accum["pp_tprec_s"].append(pp_tp)
+    accum["pp_tsens_s"].append(pp_ts)
+
+    # Raw persistence (on soft probability map)
+    pred_b0_pairs, pred_b1_pairs = get_persistence_pairs(prob_map)
+    gt_b0_pairs, gt_b1_pairs = get_persistence_pairs(gt)
+
+    for pairs, rows_key, type_ in [
+        (pred_b0_pairs, "raw_b0_rows", "predicted"),
+        (gt_b0_pairs, "raw_b0_rows", "groundtruth"),
+        (pred_b1_pairs, "raw_b1_rows", "predicted"),
+        (gt_b1_pairs, "raw_b1_rows", "groundtruth"),
+    ]:
+        for birth, death in pairs:
+            accum[rows_key].append(
+                {"model": run_name, "image": patch_name,
+                 "type": type_, "birth": birth, "death": death})
+
+    # SDT persistence (on binary prediction / ground-truth masks)
+    pred_sdt_b0, pred_sdt_b1 = get_sdt_persistence_pairs(pred)
+    gt_sdt_b0, gt_sdt_b1 = get_sdt_persistence_pairs(gt)
+
+    for pairs, rows_key, type_ in [
+        (pred_sdt_b0, "sdt_b0_rows", "predicted"),
+        (gt_sdt_b0, "sdt_b0_rows", "groundtruth"),
+        (pred_sdt_b1, "sdt_b1_rows", "predicted"),
+        (gt_sdt_b1, "sdt_b1_rows", "groundtruth"),
+    ]:
+        for birth, death in pairs:
+            accum[rows_key].append(
+                {"model": run_name, "image": patch_name,
+                 "type": type_, "birth": birth, "death": death})
+
+    # Persistence distances
+    raw_b0_wd, raw_b0_bn = compute_persistence_distances(
+        pred_b0_pairs, gt_b0_pairs)
+    raw_b1_wd, raw_b1_bn = compute_persistence_distances(
+        pred_b1_pairs, gt_b1_pairs)
+    sdt_b0_wd, sdt_b0_bn = compute_persistence_distances(
+        pred_sdt_b0, gt_sdt_b0)
+    sdt_b1_wd, sdt_b1_bn = compute_persistence_distances(
+        pred_sdt_b1, gt_sdt_b1)
+    accum["pd_distance_rows"].append({
+        "model": run_name, "image": patch_name,
+        "raw_b0_wasserstein": raw_b0_wd, "raw_b0_bottleneck": raw_b0_bn,
+        "raw_b1_wasserstein": raw_b1_wd, "raw_b1_bottleneck": raw_b1_bn,
+        "sdt_b0_wasserstein": sdt_b0_wd, "sdt_b0_bottleneck": sdt_b0_bn,
+        "sdt_b1_wasserstein": sdt_b1_wd, "sdt_b1_bottleneck": sdt_b1_bn,
+    })
+
+    if run_dir is not None:
+        _save_persistence_diagrams(
+            pred_b0_pairs, pred_b1_pairs,
+            pred_sdt_b0, gt_sdt_b0,
+            pred_sdt_b1, gt_sdt_b1,
+            run_dir, patch_name,
+        )
+
+
+def _aggregate_results(accum: dict) -> tuple:
+    """Compute mean metrics and mean persistence distances from *accum*,
+    returning the standard 8-element tuple shared by both public functions."""
+    def _nanmean(key):
+        vals = [r[key] for r in accum["pd_distance_rows"]]
+        return float(np.nanmean(vals)) if vals else float("nan")
+
+    mean_metrics_raw = (
+        float(np.mean(accum["dice_s"])), float(np.mean(accum["iou_s"])),
+        float(np.mean(accum["clDice_s"])), float(np.mean(accum["tprec_s"])),
+        float(np.mean(accum["tsens_s"])),
+    )
+    mean_metrics_pp = (
+        float(np.mean(accum["pp_dice_s"])), float(np.mean(accum["pp_iou_s"])),
+        float(np.mean(accum["pp_clDice_s"])), float(
+            np.mean(accum["pp_tprec_s"])),
+        float(np.mean(accum["pp_tsens_s"])),
+    )
+    mean_pd_distances = (
+        _nanmean("raw_b0_wasserstein"), _nanmean("raw_b0_bottleneck"),
+        _nanmean("raw_b1_wasserstein"), _nanmean("raw_b1_bottleneck"),
+        _nanmean("sdt_b0_wasserstein"), _nanmean("sdt_b0_bottleneck"),
+        _nanmean("sdt_b1_wasserstein"), _nanmean("sdt_b1_bottleneck"),
+    )
+    return (mean_metrics_raw, mean_metrics_pp,
+            accum["raw_b0_rows"], accum["raw_b1_rows"],
+            accum["sdt_b0_rows"], accum["sdt_b1_rows"],
+            accum["pd_distance_rows"], mean_pd_distances)
+
+
 @torch.no_grad()
 def collect_patch_metrics_and_betti(
     model,
@@ -358,17 +503,8 @@ def collect_patch_metrics_and_betti(
                            (raw_b0_wd, raw_b0_bn, raw_b1_wd, raw_b1_bn,
                             sdt_b0_wd, sdt_b0_bn, sdt_b1_wd, sdt_b1_bn)
     """
-    run_dir = None
-    if save_pd_dir is not None:
-        run_dir = save_pd_dir
-        run_dir.mkdir(parents=True, exist_ok=True)
-    print(
-        f"Save persistence diagrams to: {run_dir}" if run_dir else "Not saving persistence diagrams.")
-
-    dice_s, iou_s, clDice_s, tprec_s, tsens_s = [], [], [], [], []
-    pp_dice_s, pp_iou_s, pp_clDice_s, pp_tprec_s, pp_tsens_s = [], [], [], [], []
-    raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows = [], [], [], []
-    pd_distance_rows = []
+    run_dir = _setup_run_dir(save_pd_dir)
+    accum = _make_accumulators()
 
     batch_count = 0
     for images, gt_masks, _, patch_names in loader:
@@ -395,121 +531,13 @@ def collect_patch_metrics_and_betti(
             prob_maps.append(torch.sigmoid(resized).squeeze(0))
 
         for i in range(batch_size):
-            patch_name = patch_names[i]
-            gt = gt_masks[i]
-            pred = output_masks[i]
-            pp_pred = pp_masks[i]
+            _process_patch(
+                patch_names[i],
+                output_masks[i], gt_masks[i], pp_masks[i], prob_maps[i],
+                run_name, accum, run_dir,
+            )
 
-            # Segmentation metrics
-            d, iou, cl, tp, ts = compute_metrics(pred, gt)
-            dice_s.append(d.item())
-            iou_s.append(iou.item())
-            clDice_s.append(cl)
-            tprec_s.append(tp)
-            tsens_s.append(ts)
-
-            pp_d, pp_iou, pp_cl, pp_tp, pp_ts = compute_metrics(pp_pred, gt)
-            pp_dice_s.append(pp_d.item())
-            pp_iou_s.append(pp_iou.item())
-            pp_clDice_s.append(pp_cl)
-            pp_tprec_s.append(pp_tp)
-            pp_tsens_s.append(pp_ts)
-
-            # persistence diagrams on raw probability maps
-            pred_b0_pairs, pred_b1_pairs = get_persistence_pairs(prob_maps[i])
-            gt_b0_pairs, gt_b1_pairs = get_persistence_pairs(gt)
-
-            for birth, death in pred_b0_pairs:
-                raw_b0_rows.append({"model": run_name, "image": patch_name,
-                                    "type": "predicted", "birth": birth, "death": death})
-            for birth, death in gt_b0_pairs:
-                raw_b0_rows.append({"model": run_name, "image": patch_name,
-                                    "type": "groundtruth", "birth": birth, "death": death})
-            for birth, death in pred_b1_pairs:
-                raw_b1_rows.append({"model": run_name, "image": patch_name,
-                                    "type": "predicted", "birth": birth, "death": death})
-            for birth, death in gt_b1_pairs:
-                raw_b1_rows.append({"model": run_name, "image": patch_name,
-                                    "type": "groundtruth", "birth": birth, "death": death})
-
-            # persistence diagrams on signed distance transform (SDT) maps,
-            # calculated from binary (prediction, ground truth) masks
-            pred_sdt_b0, pred_sdt_b1 = get_sdt_persistence_pairs(pred)
-            gt_sdt_b0, gt_sdt_b1 = get_sdt_persistence_pairs(gt)
-
-            for birth, death in pred_sdt_b0:
-                sdt_b0_rows.append({"model": run_name, "image": patch_name,
-                                    "type": "predicted", "birth": birth, "death": death})
-            for birth, death in gt_sdt_b0:
-                sdt_b0_rows.append({"model": run_name, "image": patch_name,
-                                    "type": "groundtruth", "birth": birth, "death": death})
-            for birth, death in pred_sdt_b1:
-                sdt_b1_rows.append({"model": run_name, "image": patch_name,
-                                    "type": "predicted", "birth": birth, "death": death})
-            for birth, death in gt_sdt_b1:
-                sdt_b1_rows.append({"model": run_name, "image": patch_name,
-                                    "type": "groundtruth", "birth": birth, "death": death})
-
-            # Persistence diagram distances (Wasserstein-1 and bottleneck)
-            raw_b0_wd, raw_b0_bn = compute_persistence_distances(
-                pred_b0_pairs, gt_b0_pairs)
-            raw_b1_wd, raw_b1_bn = compute_persistence_distances(
-                pred_b1_pairs, gt_b1_pairs)
-            sdt_b0_wd, sdt_b0_bn = compute_persistence_distances(
-                pred_sdt_b0, gt_sdt_b0)
-            sdt_b1_wd, sdt_b1_bn = compute_persistence_distances(
-                pred_sdt_b1, gt_sdt_b1)
-            pd_distance_rows.append({
-                "model": run_name,
-                "image": patch_name,
-                "raw_b0_wasserstein": raw_b0_wd,
-                "raw_b0_bottleneck": raw_b0_bn,
-                "raw_b1_wasserstein": raw_b1_wd,
-                "raw_b1_bottleneck": raw_b1_bn,
-                "sdt_b0_wasserstein": sdt_b0_wd,
-                "sdt_b0_bottleneck": sdt_b0_bn,
-                "sdt_b1_wasserstein": sdt_b1_wd,
-                "sdt_b1_bottleneck": sdt_b1_bn,
-            })
-
-            if run_dir is not None:
-                _save_persistence_diagrams(
-                    pred_b0_pairs,
-                    pred_b1_pairs,
-                    pred_sdt_b0, gt_sdt_b0,
-                    pred_sdt_b1, gt_sdt_b1,
-                    run_dir,
-                    patch_name,
-                )
-
-    mean_metrics_raw = (
-        float(np.mean(dice_s)), float(
-            np.mean(iou_s)), float(np.mean(clDice_s)),
-        float(np.mean(tprec_s)), float(np.mean(tsens_s)),
-    )
-    mean_metrics_pp = (
-        float(np.mean(pp_dice_s)), float(
-            np.mean(pp_iou_s)), float(np.mean(pp_clDice_s)),
-        float(np.mean(pp_tprec_s)), float(np.mean(pp_tsens_s)),
-    )
-
-    def _nanmean_col(key):
-        vals = [r[key] for r in pd_distance_rows]
-        return float(np.nanmean(vals)) if vals else float("nan")
-
-    mean_pd_distances = (
-        _nanmean_col("raw_b0_wasserstein"),
-        _nanmean_col("raw_b0_bottleneck"),
-        _nanmean_col("raw_b1_wasserstein"),
-        _nanmean_col("raw_b1_bottleneck"),
-        _nanmean_col("sdt_b0_wasserstein"),
-        _nanmean_col("sdt_b0_bottleneck"),
-        _nanmean_col("sdt_b1_wasserstein"),
-        _nanmean_col("sdt_b1_bottleneck"),
-    )
-    return (mean_metrics_raw, mean_metrics_pp,
-            raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows,
-            pd_distance_rows, mean_pd_distances)
+    return _aggregate_results(accum)
 
 
 def get_persistence_pairs_from_filtration(
@@ -687,6 +715,88 @@ def plot_betti_curve(
     plt.tight_layout()
     plt.show()
     plt.close()
+
+
+def _load_binary_mask_tensor(path: Path) -> torch.Tensor:
+    """Load a binary mask image as a (1, H, W) float32 tensor (values 0.0/1.0).
+
+    Handles both 0/255 (standard PNG) and 0/1 (nnUNet convention) encodings.
+    """
+    arr = np.array(Image.open(path))
+    if arr.ndim == 3:
+        arr = arr[..., 0]
+    return torch.from_numpy((arr > 0).astype(np.float32)).unsqueeze(0)
+
+
+@torch.no_grad()
+def collect_patch_metrics_and_betti_from_masks(
+    gt_mask_dir: Path,
+    pred_mask_dir: Path,
+    run_name: str,
+    save_pd_dir: Path | None = None,
+) -> tuple:
+    """Compute patch-level segmentation metrics and persistence diagrams by
+    loading pre-computed binary prediction masks from a directory.
+
+    Replaces model inference in ``collect_patch_metrics_and_betti`` with direct
+    mask loading from disk.  Intended for evaluating nnUNet predictions.
+
+    Prediction files are matched to ground-truth files by stem (filename
+    without extension).  Files present in *pred_mask_dir* that have no
+    matching entry in *gt_mask_dir* are skipped with a warning.
+
+    The binary prediction is used as its own "probability map" for the raw
+    persistence-diagram computation (filtration values are 0 or 1, so the
+    curves are degenerate step functions — still a valid topological summary).
+
+    Parameters
+    ----------
+    gt_mask_dir   : directory containing ground-truth mask files named
+                    ``{case}.*``.
+    pred_mask_dir : directory containing predicted mask files named
+                    ``{case}.*``.
+    run_name      : identifier stored in each output row's ``model`` field.
+    save_pd_dir   : when given, persistence-diagram figures are saved here.
+
+    Returns
+    -------
+    Same 8-element tuple as ``collect_patch_metrics_and_betti``:
+    ``(mean_metrics_raw, mean_metrics_pp,
+      raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows,
+      pd_distance_rows, mean_pd_distances)``
+    """
+    run_dir = _setup_run_dir(save_pd_dir)
+    accum = _make_accumulators()
+
+    gt_index = {p.stem: p for p in gt_mask_dir.iterdir() if p.is_file()}
+    pred_files = sorted(
+        p for p in pred_mask_dir.iterdir()
+        if p.is_file() and p.suffix != ".npz"
+    )
+
+    for pred_path in pred_files:
+        case = pred_path.stem
+        gt_path = gt_index.get(case)
+        if gt_path is None:
+            print(
+                f"  [WARN] No ground-truth found for prediction '{case}', skipping.")
+            continue
+
+        pred = _load_binary_mask_tensor(pred_path)   # (1, H, W)
+        gt = _load_binary_mask_tensor(gt_path)        # (1, H, W)
+        pp_pred = remove_small_objects_from_batch(pred.unsqueeze(0)).squeeze(0)
+
+        npz_path = pred_path.parent / f"{case}.npz"
+        npz_data = np.load(npz_path)
+        key = "probabilities" if "probabilities" in npz_data else npz_data.files[0]
+        probs_np = npz_data[key]  # (num_classes, 1, H, W)
+        fg_np = probs_np[1] if probs_np.shape[0] > 1 else probs_np[0]
+        prob_map = torch.from_numpy(fg_np.astype(np.float32))
+
+        _process_patch(case, pred, gt, pp_pred, prob_map,
+                       run_name, accum, run_dir)
+
+    return _aggregate_results(accum)
 
 
 def _load_latest_csv(metrics_dir: Path, pattern: re.Pattern) -> tuple[pd.DataFrame, Path | None]:

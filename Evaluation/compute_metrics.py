@@ -36,6 +36,7 @@ import Environment.env_utils as env_utils
 
 from Evaluation.evaluation_util import (
     collect_patch_metrics_and_betti,
+    collect_patch_metrics_and_betti_from_masks,
     load_latest_metrics_csv,
     load_latest_persistence_raw_b0_csv,
     load_latest_persistence_raw_b1_csv,
@@ -44,10 +45,20 @@ from Evaluation.evaluation_util import (
     load_latest_persistence_distances_csv,
 )
 
-MODELS_RUNS = [#"SAM_LoRA_Finetuning_20260219_150640",
-               "SAM_LoRA_Finetuning_20260224_154858"]
+# WandB SAM runs to evaluate (run names)
+# For each run, evaluates artifact with name ending with _SAM_PARAMS_ARTIFACT_SUFFIX
+_SAM_MODELS_RUNS = [
+    # "SAM_LoRA_Finetuning_20260219_150640",
+    "SAM_LoRA_Finetuning_20260224_154858"]
+_SAM_PARAMS_ARTIFACT_SUFFIX = "_params_minloss:v0"
 
-PARAMS_ARTIFACT_SUFFIX = "_params_minloss:v0"
+# nnUNet evaluations: list of (dataset_name, trainer_class) tuples
+# For each pair, every trainer sub-directory under
+# NNUNET_RESULTS_DIR/<dataset>/ whose name starts with trainer_class is evaluated
+_NNUNET_EVALUATIONS: list[tuple[str, str]] = [
+    ("Dataset001_Segmentation_v1", "nnUNetTrainerWandb__nnUNetPlans__2d"),
+    # ("Dataset001_Segmentation_v1", "nnUNetTrainerClDiceLoss"),
+]
 
 
 def _collect_combined(model, test_img_dir, test_mask_dir, downsample_size, device, batch_size, run_name, save_pd_dir=None):
@@ -71,6 +82,10 @@ def main():
                         help="Re-evaluate all models, ignoring cached CSVs")
     parser.add_argument("--dataset", type=str, default=None,
                         help="dataset for evaluation, replaces run dataset if provided")
+    parser.add_argument("--no-sam", action="store_true",
+                        help="Skip SAM model evaluation")
+    parser.add_argument("--no-nnunet", action="store_true",
+                        help="Skip nnUNet evaluation")
     args = parser.parse_args()
 
     env_utils.load_forksight_env()
@@ -90,11 +105,24 @@ def main():
     WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
     WANDB_SAM_PROJECT = os.getenv("WANDB_SAM_PROJECT", "ForkSight-SAM")
 
+    NNUNET_RAW_DIR = os.getenv("NNUNET_RAW_DIR")
+    NNUNET_RESULTS_DIR = os.getenv("NNUNET_RESULTS_DIR")
+    NNUNET_TEST_MASK_DIR = os.getenv("NNUNET_TEST_MASK_DIR", "labelsTs")
+    NNUNET_PRED_DIR = os.getenv(
+        "NNUNET_PRED_DIR", "best_configuration_inference_output")
+
     if DATASETS_DIR is None:
         raise ValueError("DATASETS_DIR environment variable must be set.")
     if EVALUATION_OUTPUT_DIR is None:
         raise ValueError(
             "EVALUATION_OUTPUT_DIR environment variable must be set.")
+    if _NNUNET_EVALUATIONS and not args.no_nnunet:
+        if NNUNET_RAW_DIR is None:
+            raise ValueError(
+                "NNUNET_RAW_DIR must be set when NNUNET_EVALUATIONS is non-empty.")
+        if NNUNET_RESULTS_DIR is None:
+            raise ValueError(
+                "NNUNET_RESULTS_DIR must be set when NNUNET_EVALUATIONS is non-empty.")
 
     device = torch.device(
         f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
@@ -120,84 +148,30 @@ def main():
     computed_models = set(
         df_prev_metrics.index) if not df_prev_metrics.empty else set()
 
-    api = wandb.Api()
-    all_runs = list(api.runs(f"{WANDB_ENTITY}/{WANDB_SAM_PROJECT}"))
-    runs_to_eval = [
-        r for r in all_runs
-        if sam_lora_util.EVALUATED_TAG in r.tags
-        and r.state == "finished"
-        and r.name in MODELS_RUNS
-        and r.name not in computed_models
-    ]
-
-    if not runs_to_eval:
-        print("No new models to evaluate, all results already cached.")
-    else:
-        print(f"Will evaluate {len(runs_to_eval)} model(s): "
-              + ", ".join(r.name for r in runs_to_eval))
-
     metrics_results = {}
     all_raw_b0_rows, all_raw_b1_rows, all_sdt_b0_rows, all_sdt_b1_rows = [], [], [], []
     all_dist_rows = []
 
-    for run in runs_to_eval:
-        print(f"\n{'='*60}")
-        print(f"Evaluating: {run.name}")
-        print(f"{'='*60}")
-
-        run_artifacts = [a for a in run.logged_artifacts()
-                         if a.type == "model"]
-        artifact = next(
-            (a for a in run_artifacts if a.name.endswith(PARAMS_ARTIFACT_SUFFIX)),
-            None,
-        )
-        if artifact is None:
-            print(
-                f"  No artifact ending with '{PARAMS_ARTIFACT_SUFFIX}', skipping")
-            continue
-        print(f"  Artifact: {artifact.name}")
-
-        params, _ = sam_lora_util.get_params_from_artifact(artifact, device)
-        model = sam_lora_util.initialize_sam_lora_with_params(
-            run.config, params, device)
-        model.eval()
-
-        downsample_size = run.config.get("dataset_downsample_size", None)
-        if isinstance(downsample_size, list):
-            downsample_size = tuple(downsample_size)
-        elif isinstance(downsample_size, int) and downsample_size != 0:
-            downsample_size = (downsample_size, downsample_size)
-        elif isinstance(downsample_size, int) and downsample_size == 0:
-            downsample_size = None
-        print(f"  Downsample size: {downsample_size}")
-
-        dataset_name = args.dataset if args.dataset else run.config.get(
-            "dataset", "")
-        test_img_dir = (Path(DATASETS_DIR) / dataset_name /
-                        "test" / HIGHRES_IMG_PATCHES_DIR_NAME)
-        test_mask_dir = (Path(DATASETS_DIR) / dataset_name /
-                         "test" / HIGHRES_MASK_PATCHES_DIR_NAME)
-
-        print(
-            f"\n  Computing patch-level metrics and persistence diagrams (dataset={dataset_name}, batch_size={args.batch_size})")
-
-        (dice, iou, clDice, tprec, tsens), \
-            (pp_dice, pp_iou, pp_clDice, pp_tprec, pp_tsens), \
-            raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows, \
-            pd_distance_rows, \
-            (raw_b0_wd, raw_b0_bn, raw_b1_wd, raw_b1_bn,
-             sdt_b0_wd, sdt_b0_bn, sdt_b1_wd, sdt_b1_bn) = \
-            _collect_combined(model, test_img_dir, test_mask_dir,
-                              downsample_size, device, args.batch_size, run.name,
-                              save_pd_dir=_EVAL_DIR / f"persistence_{run.name}")
-
-        all_raw_b0_rows.extend(raw_b0_rows)
-        all_raw_b1_rows.extend(raw_b1_rows)
-        all_sdt_b0_rows.extend(sdt_b0_rows)
-        all_sdt_b1_rows.extend(sdt_b1_rows)
-        all_dist_rows.extend(pd_distance_rows)
-        metrics_results[run.name] = {
-            "dataset": run.config.get("dataset", ""),
+    def _record_results(
+        model_key: str,
+        dataset: str,
+        raw_metrics: tuple,
+        pp_metrics: tuple,
+        raw_b0, raw_b1, sdt_b0, sdt_b1,
+        dist_rows: list,
+        pd_distances: tuple,
+    ):
+        dice, iou, clDice, tprec, tsens = raw_metrics
+        pp_dice, pp_iou, pp_clDice, pp_tprec, pp_tsens = pp_metrics
+        (raw_b0_wd, raw_b0_bn, raw_b1_wd, raw_b1_bn,
+         sdt_b0_wd, sdt_b0_bn, sdt_b1_wd, sdt_b1_bn) = pd_distances
+        all_raw_b0_rows.extend(raw_b0)
+        all_raw_b1_rows.extend(raw_b1)
+        all_sdt_b0_rows.extend(sdt_b0)
+        all_sdt_b1_rows.extend(sdt_b1)
+        all_dist_rows.extend(dist_rows)
+        metrics_results[model_key] = {
+            "dataset": dataset,
             "Dice": dice if dice else float("nan"),
             "IoU": iou if iou else float("nan"),
             "clDice": clDice if clDice else float("nan"),
@@ -218,8 +192,128 @@ def main():
             "Bottleneck B1 SDT": sdt_b1_bn,
         }
 
-        del model, params
-        torch.cuda.empty_cache()
+    # SAM model evaluation                                                 #
+    if not args.no_sam:
+        api = wandb.Api()
+        all_runs = list(api.runs(f"{WANDB_ENTITY}/{WANDB_SAM_PROJECT}"))
+        runs_to_eval = [
+            r for r in all_runs
+            if sam_lora_util.EVALUATED_TAG in r.tags
+            and r.state == "finished"
+            and r.name in _SAM_MODELS_RUNS
+            and r.name not in computed_models
+        ]
+
+        if not runs_to_eval:
+            print("No new SAM models to evaluate, all results already cached.")
+        else:
+            print(f"Will evaluate {len(runs_to_eval)} SAM model(s): "
+                  + ", ".join(r.name for r in runs_to_eval))
+
+        for run in runs_to_eval:
+            print(f"\n{'='*60}")
+            print(f"Evaluating SAM: {run.name}")
+            print(f"{'='*60}")
+
+            run_artifacts = [a for a in run.logged_artifacts()
+                             if a.type == "model"]
+            artifact = next(
+                (a for a in run_artifacts if a.name.endswith(
+                    _SAM_PARAMS_ARTIFACT_SUFFIX)),
+                None,
+            )
+            if artifact is None:
+                print(
+                    f"  No artifact ending with '{_SAM_PARAMS_ARTIFACT_SUFFIX}', skipping")
+                continue
+            print(f"  Artifact: {artifact.name}")
+
+            params, _ = sam_lora_util.get_params_from_artifact(
+                artifact, device)
+            model = sam_lora_util.initialize_sam_lora_with_params(
+                run.config, params, device)
+            model.eval()
+
+            downsample_size = run.config.get("dataset_downsample_size", None)
+            if isinstance(downsample_size, list) and len(downsample_size) == 2 and all(isinstance(x, int) and x > 0 for x in downsample_size):
+                downsample_size = tuple(downsample_size)
+            elif isinstance(downsample_size, int) and downsample_size > 0:
+                downsample_size = (downsample_size, downsample_size)
+            else:
+                downsample_size = None
+            print(f"  Downsample size: {downsample_size}")
+
+            dataset_name = args.dataset if args.dataset else run.config.get(
+                "dataset", "")
+            test_img_dir = (Path(DATASETS_DIR) / dataset_name /
+                            "test" / HIGHRES_IMG_PATCHES_DIR_NAME)
+            test_mask_dir = (Path(DATASETS_DIR) / dataset_name /
+                             "test" / HIGHRES_MASK_PATCHES_DIR_NAME)
+
+            print(
+                f"\n  Computing patch-level metrics and persistence diagrams "
+                f"(dataset={dataset_name}, batch_size={args.batch_size})")
+
+            raw_metrics, pp_metrics, \
+                raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows, \
+                pd_distance_rows, pd_distances = \
+                _collect_combined(model, test_img_dir, test_mask_dir,
+                                  downsample_size, device, args.batch_size, run.name,
+                                  save_pd_dir=_EVAL_DIR / f"persistence_{run.name}")
+
+            _record_results(
+                run.name, run.config.get("dataset", ""),
+                raw_metrics, pp_metrics,
+                raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows,
+                pd_distance_rows, pd_distances,
+            )
+
+            del model, params
+            torch.cuda.empty_cache()
+
+    # nnUNet evaluation
+    if not args.no_nnunet and _NNUNET_EVALUATIONS:
+        for dataset_name, trainer_class in _NNUNET_EVALUATIONS:
+            pred_dir = Path(NNUNET_RESULTS_DIR) / \
+                dataset_name / trainer_class / NNUNET_PRED_DIR
+            if not pred_dir:
+                print(
+                    f"\n[WARN] No predictions directory '{str(pred_dir)}' found, skipping.")
+                continue
+
+            gt_mask_dir = Path(NNUNET_RAW_DIR) / \
+                dataset_name / NNUNET_TEST_MASK_DIR
+            if not gt_mask_dir.is_dir():
+                print(
+                    f"\n[WARN] nnUNet GT mask dir not found: {gt_mask_dir}, skipping.")
+                continue
+
+            model_key = f"nnunet/{dataset_name}/{trainer_class}"
+            if model_key in computed_models:
+                print(f"\n  Already cached: {model_key}")
+                continue
+
+            print(f"\n{'='*60}")
+            print(f"Evaluating nnUNet: {model_key}")
+            print(f"  GT masks  : {gt_mask_dir}")
+            print(f"  Predictions: {pred_dir}")
+            print(f"{'='*60}")
+
+            raw_metrics, pp_metrics, \
+                raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows, \
+                pd_distance_rows, pd_distances = \
+                collect_patch_metrics_and_betti_from_masks(
+                    gt_mask_dir, pred_dir, model_key,
+                    save_pd_dir=_EVAL_DIR /
+                    f"persistence_{dataset_name}_{trainer_class}",
+                )
+
+            _record_results(
+                model_key, dataset_name,
+                raw_metrics, pp_metrics,
+                raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows,
+                pd_distance_rows, pd_distances,
+            )
 
     # metrics CSV
     df_new_metrics = pd.DataFrame(metrics_results).T
