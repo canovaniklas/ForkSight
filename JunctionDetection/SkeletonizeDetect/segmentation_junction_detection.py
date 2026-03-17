@@ -114,7 +114,6 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
             nx_graph[cycle[i]][cycle[(i + 1) % len(cycle)]].get('weight', 0)
             for i in range(len(cycle))
         )
-        print(f"cycle found with {len(cycle)} nodes and length {cycle_length}")
         if cycle_length < MIN_CYCLE_LENGTH:
             nodes_in_cycles.update(cycle)
 
@@ -264,10 +263,6 @@ def detect_junctions_in_segmentation_mask(
     Returns (coords_3way, coords_4way, skeleton) where each coords array is
     (N, 2) in (x, y) image coordinates.
     '''
-    print(
-        f"detecting junctions in segmentation mask, with min cycle length {MIN_CYCLE_LENGTH}"
-        f" min branch length {MIN_BRANCH_LENGTH}, and max junction connector length {MAX_JUNCTION_CONNECTOR_LENGTH}")
-
     skeleton = skeletonize_mask(segmentation_mask)
     skeleton = prune_skeleton(skeleton)
 
