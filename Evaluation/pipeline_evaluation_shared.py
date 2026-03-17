@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torchvision.transforms as transforms
 from matplotlib import pyplot as plt
 from PIL import Image
 
@@ -13,7 +14,11 @@ sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 import Segmentation.PostProcessing.segmentation_postprocessing as _postproc
 import JunctionDetection.SkeletonizeDetect.segmentation_junction_detection as _jd
-from evaluation_util import format_score, hard_dice_score, iou_score, hard_clDice, get_betti_at_thresholds, plot_betti_curve
+from evaluation_util import (
+    format_score, hard_dice_score, iou_score, hard_clDice,
+    get_betti_at_thresholds, plot_betti_curve,
+    get_batched_input_list,
+)
 
 
 PATCH_SIZE = (1024, 1024)
@@ -306,3 +311,86 @@ def evaluate_soi_patch(
         skeleton=pred_skeleton,
         figsize=(6, 6), plot_grid=False,
     )
+
+
+def load_full_image_as_patches(
+    image_path: Path,
+    patch_size: tuple = PATCH_SIZE,
+    grid_size: tuple = GRID_SIZE,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Load a full-resolution image and split it into a patch grid.
+
+    The full image must have spatial size (rows*pH, cols*pW) exactly.
+
+    Parameters
+    ----------
+    image_path    : path to the full-resolution (e.g. 4096×4096) image file.
+    patch_size    : (pH, pW) of each patch.
+    grid_size     : (rows, cols) of the patch grid.
+
+    Returns
+    -------
+    patches    : (rows*cols, 3, pH, pW) float tensor in row-major order.
+    full_image : (3, full_H, full_W) float tensor of the complete image.
+    """
+    img = Image.open(image_path)
+    to_tensor = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Lambda(lambda t: t.repeat(3, 1, 1) if t.shape[0] == 1 else t),
+    ])
+    full_img = to_tensor(img)  # (3, H, W)
+
+    ph, pw = patch_size
+    rows, cols = grid_size
+
+    # Split into (C, rows, cols, pH, pW) using unfold, then rearrange
+    patches = full_img.unfold(1, ph, ph).unfold(2, pw, pw)
+    # (3, rows, cols, pH, pW) → (rows*cols, 3, pH, pW)
+    patches = patches.permute(1, 2, 0, 3, 4).contiguous().view(rows * cols, 3, ph, pw)
+
+    return patches, full_img
+
+
+@torch.no_grad()
+def predict_patches_batched(
+    model,
+    patches: torch.Tensor,
+    device: torch.device,
+    batch_size: int = 4,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Run SAM LoRA inference on a (B, 3, H, W) patch tensor in mini-batches.
+
+    Parameters
+    ----------
+    model      : SAM LoRA model in eval mode.
+    patches    : (B, 3, H, W) patch tensor.
+    device     : inference device.
+    batch_size : patches per forward pass.
+
+    Returns
+    -------
+    mask_patches : (B, 1, H, W) binary prediction masks (CPU).
+    prob_patches : (B, 1, H, W) sigmoid probability maps (CPU).
+    """
+    all_masks, all_probs = [], []
+    n = patches.shape[0]
+    for start in range(0, n, batch_size):
+        batch = patches[start:start + batch_size].to(device)
+        input_list = get_batched_input_list(batch)
+        outputs = model(batched_input=input_list, multimask_output=False)
+
+        masks = torch.cat([out["masks"] for out in outputs]).detach().cpu()
+
+        batch_probs = []
+        for out in outputs:
+            resized = model.sam_model.postprocess_masks(
+                out["low_res_logits"],
+                input_size=(1024, 1024),
+                original_size=(1024, 1024),
+            )
+            batch_probs.append(torch.sigmoid(resized).squeeze(0).detach().cpu())
+
+        all_masks.append(masks)
+        all_probs.append(torch.stack(batch_probs))
+
+    return torch.cat(all_masks), torch.cat(all_probs)

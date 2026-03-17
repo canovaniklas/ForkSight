@@ -31,9 +31,12 @@ from torch.utils.data import DataLoader
 import wandb
 
 
-import Segmentation.SAM.sam_lora_util as sam_lora_util
 import Environment.env_utils as env_utils
-
+from Segmentation.SAM.sam_lora_util import (
+    SegmentationDataset,
+    get_params_from_artifact,
+    initialize_sam_lora_with_params,
+)
 from Evaluation.evaluation_util import (
     collect_patch_metrics_and_betti,
     collect_patch_metrics_and_betti_from_masks,
@@ -44,28 +47,18 @@ from Evaluation.evaluation_util import (
     load_latest_persistence_sdt_b1_csv,
     load_latest_persistence_distances_csv,
 )
-
-# WandB SAM runs to evaluate (run names)
-# For each run, evaluates artifact with name ending with _SAM_PARAMS_ARTIFACT_SUFFIX
-_SAM_MODELS_RUNS = [
-    # "SAM_LoRA_Finetuning_20260219_150640",
-    "SAM_LoRA_Finetuning_20260224_154858"]
-_SAM_PARAMS_ARTIFACT_SUFFIX = "_params_minloss:v0"
-
-# nnUNet evaluations: list of (dataset_name, trainer_class) tuples
-# For each pair, every trainer sub-directory under
-# NNUNET_RESULTS_DIR/<dataset>/ whose name starts with trainer_class is evaluated
-_NNUNET_EVALUATIONS: list[tuple[str, str]] = [
-    ("Dataset001_Segmentation_v1", "nnUNetTrainerWandb__nnUNetPlans__2d"),
-    # ("Dataset001_Segmentation_v1", "nnUNetTrainerClDiceLoss"),
-]
+from Evaluation.compute_metrics_config import (
+    SAM_MODELS_RUNS,
+    SAM_PARAMS_ARTIFACT_SUFFIX,
+    NNUNET_EVALUATIONS,
+)
 
 
 def _collect_combined(model, test_img_dir, test_mask_dir, downsample_size, device, batch_size, run_name, save_pd_dir=None):
     """Run patch-level inference once per batch, returning segmentation metrics
     and per-patch persistence diagram rows.
     """
-    dataset = sam_lora_util.SegmentationDataset(
+    dataset = SegmentationDataset(
         test_img_dir, test_mask_dir, downsample_size=downsample_size, return_img_name=True)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
     return collect_patch_metrics_and_betti(model, loader, device, run_name, save_pd_dir=save_pd_dir)
@@ -116,7 +109,7 @@ def main():
     if EVALUATION_OUTPUT_DIR is None:
         raise ValueError(
             "EVALUATION_OUTPUT_DIR environment variable must be set.")
-    if _NNUNET_EVALUATIONS and not args.no_nnunet:
+    if NNUNET_EVALUATIONS and not args.no_nnunet:
         if NNUNET_RAW_DIR is None:
             raise ValueError(
                 "NNUNET_RAW_DIR must be set when NNUNET_EVALUATIONS is non-empty.")
@@ -129,7 +122,7 @@ def main():
     print(f"Using device: {device}")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    _EVAL_DIR = Path(EVALUATION_OUTPUT_DIR) / timestamp
+    _EVAL_DIR = Path(EVALUATION_OUTPUT_DIR) / "segmentation" / timestamp
     _CSV_DIR = _EVAL_DIR / "csv"
     _CSV_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -198,9 +191,8 @@ def main():
         all_runs = list(api.runs(f"{WANDB_ENTITY}/{WANDB_SAM_PROJECT}"))
         runs_to_eval = [
             r for r in all_runs
-            if sam_lora_util.EVALUATED_TAG in r.tags
-            and r.state == "finished"
-            and r.name in _SAM_MODELS_RUNS
+            if r.state == "finished"
+            and r.name in SAM_MODELS_RUNS
             and r.name not in computed_models
         ]
 
@@ -219,19 +211,17 @@ def main():
                              if a.type == "model"]
             artifact = next(
                 (a for a in run_artifacts if a.name.endswith(
-                    _SAM_PARAMS_ARTIFACT_SUFFIX)),
+                    SAM_PARAMS_ARTIFACT_SUFFIX)),
                 None,
             )
             if artifact is None:
                 print(
-                    f"  No artifact ending with '{_SAM_PARAMS_ARTIFACT_SUFFIX}', skipping")
+                    f"  No artifact ending with '{SAM_PARAMS_ARTIFACT_SUFFIX}', skipping")
                 continue
             print(f"  Artifact: {artifact.name}")
 
-            params, _ = sam_lora_util.get_params_from_artifact(
-                artifact, device)
-            model = sam_lora_util.initialize_sam_lora_with_params(
-                run.config, params, device)
+            params, _ = get_params_from_artifact(artifact, device)
+            model = initialize_sam_lora_with_params(run.config, params, device)
             model.eval()
 
             downsample_size = run.config.get("dataset_downsample_size", None)
@@ -272,8 +262,8 @@ def main():
             torch.cuda.empty_cache()
 
     # nnUNet evaluation
-    if not args.no_nnunet and _NNUNET_EVALUATIONS:
-        for dataset_name, trainer_class in _NNUNET_EVALUATIONS:
+    if not args.no_nnunet and NNUNET_EVALUATIONS:
+        for dataset_name, trainer_class in NNUNET_EVALUATIONS:
             pred_dir = Path(NNUNET_RESULTS_DIR) / \
                 dataset_name / trainer_class / NNUNET_PRED_DIR
             if not pred_dir:
