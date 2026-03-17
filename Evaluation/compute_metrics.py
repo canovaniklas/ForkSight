@@ -61,14 +61,14 @@ _NNUNET_EVALUATIONS: list[tuple[str, str]] = [
 ]
 
 
-def _collect_combined(model, test_img_dir, test_mask_dir, downsample_size, device, batch_size, run_name, save_pd_dir=None):
+def _collect_combined(model, test_img_dir, test_mask_dir, downsample_size, device, batch_size, run_name, save_pd_dir=None, is_test=False):
     """Run patch-level inference once per batch, returning segmentation metrics
     and per-patch persistence diagram rows.
     """
     dataset = sam_lora_util.SegmentationDataset(
         test_img_dir, test_mask_dir, downsample_size=downsample_size, return_img_name=True)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-    return collect_patch_metrics_and_betti(model, loader, device, run_name, save_pd_dir=save_pd_dir)
+    return collect_patch_metrics_and_betti(model, loader, device, run_name, save_pd_dir=save_pd_dir, is_test=is_test)
 
 
 def main():
@@ -86,6 +86,8 @@ def main():
                         help="Skip SAM model evaluation")
     parser.add_argument("--no-nnunet", action="store_true",
                         help="Skip nnUNet evaluation")
+    parser.add_argument("--test", type=bool, default=False,
+                        help="Run in test mode with limited data")
     args = parser.parse_args()
 
     env_utils.load_forksight_env()
@@ -127,6 +129,8 @@ def main():
     device = torch.device(
         f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    print(f"\Test mode: {args.test}\n")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     _EVAL_DIR = Path(EVALUATION_OUTPUT_DIR) / timestamp
@@ -259,7 +263,7 @@ def main():
                 pd_distance_rows, pd_distances = \
                 _collect_combined(model, test_img_dir, test_mask_dir,
                                   downsample_size, device, args.batch_size, run.name,
-                                  save_pd_dir=_EVAL_DIR / f"persistence_{run.name}")
+                                  save_pd_dir=_EVAL_DIR / f"persistence_{run.name}", is_test=args.test)
 
             _record_results(
                 run.name, run.config.get("dataset", ""),
@@ -306,6 +310,7 @@ def main():
                     gt_mask_dir, pred_dir, model_key,
                     save_pd_dir=_EVAL_DIR /
                     f"persistence_{dataset_name}_{trainer_class}",
+                    is_test=args.test
                 )
 
             _record_results(

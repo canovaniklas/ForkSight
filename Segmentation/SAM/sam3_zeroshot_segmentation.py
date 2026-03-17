@@ -8,7 +8,6 @@ from PIL import Image
 from huggingface_hub import login
 
 
-sys.path.append(os.path.abspath(".."))
 from Environment.env_utils import load_forksight_env
 
 print(sys.executable, sys.version_info)
