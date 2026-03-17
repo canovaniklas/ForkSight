@@ -100,7 +100,7 @@ def get_graph_coordinates_degrees(skeleton: np.ndarray):
 
 
 def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarray, degrees: np.ndarray,
-                               verbose=False) -> np.ndarray:
+                               verbose=False) -> tuple[np.ndarray, np.ndarray]:
     skel_obj = Skeleton(skeleton)
     skel_stats = summarize(skel_obj)
     skel_stats = skel_stats[skel_stats['node-id-src']
@@ -117,7 +117,8 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
         if cycle_length < MIN_CYCLE_LENGTH:
             nodes_in_cycles.update(cycle)
 
-    valid_coords = []
+    valid_coords_3way = []
+    valid_coords_4way = []
     nodes_handled = set()
 
     def check_path_significance_by_length(branch_row, source_node_idx, current_length, current_depth):
@@ -176,7 +177,7 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
             if nof_significant_arms == 4:
                 midpoint = (
                     skel_obj.coordinates[n1] + skel_obj.coordinates[n2]) / 2
-                valid_coords.append(midpoint)
+                valid_coords_4way.append(midpoint)
 
             nodes_handled.update([n1, n2])
 
@@ -206,7 +207,8 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
                     significant_arms_to_junction.append(branch)
 
         if nof_significant_arms == 3 or nof_significant_arms == 4:
-            junction_results.append((j_idx, skel_obj.coordinates[j_idx]))
+            junction_results.append(
+                (j_idx, skel_obj.coordinates[j_idx], nof_significant_arms))
 
             if verbose:
                 print(
@@ -223,11 +225,11 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
                         f"    length: {arm['branch-distance']}, nodes: {arm['node-id-src']}->{arm['node-id-dst']}, type: {arm['branch-type']}")
 
     # suppress 4-way junctions that are close to a VALID 3-way junction (replication fork)
-    valid_3way_indices = {j_idx for j_idx,
-                          _ in junction_results if degrees[j_idx] == 3}
+    valid_3way_indices = {j_idx for j_idx, _,
+                          nof_arms in junction_results if nof_arms == 3}
     suppressed_by_3way = set()
-    for j_idx, _ in junction_results:
-        if degrees[j_idx] != 4:
+    for j_idx, _, nof_arms in junction_results:
+        if nof_arms != 4:
             continue
         incident = skel_stats[(skel_stats['node-id-src'] == j_idx) |
                               (skel_stats['node-id-dst'] == j_idx)]
@@ -238,31 +240,37 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
                 suppressed_by_3way.add(j_idx)
                 break
 
-    for j_idx, coord in junction_results:
+    for j_idx, coord, nof_arms in junction_results:
         if j_idx not in suppressed_by_3way:
-            valid_coords.append(coord)
+            if nof_arms == 3:
+                valid_coords_3way.append(coord)
+            else:
+                valid_coords_4way.append(coord)
             if verbose:
-                print(
-                    f"valid junction idx: {len(valid_coords)-1} at node {j_idx}")
+                print(f"valid junction at node {j_idx} ({nof_arms}-way)")
 
-    if not valid_coords:
-        return np.empty((0, 2))
-    return np.array(valid_coords)
+    coords_3way = np.array(
+        valid_coords_3way) if valid_coords_3way else np.empty((0, 2))
+    coords_4way = np.array(
+        valid_coords_4way) if valid_coords_4way else np.empty((0, 2))
+    return coords_3way, coords_4way
 
 
-def detect_junctions_in_segmentation_mask(segmentation_mask: torch.Tensor, verbose=False) -> np.ndarray:
+def detect_junctions_in_segmentation_mask(
+        segmentation_mask: torch.Tensor, verbose=False
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    '''
+    Returns (coords_3way, coords_4way, skeleton) where each coords array is
+    (N, 2) in (x, y) image coordinates.
+    '''
     skeleton = skeletonize_mask(segmentation_mask)
     skeleton = prune_skeleton(skeleton)
 
     _, _, degrees = get_graph_coordinates_degrees(skeleton)
 
-    # get indices of junction nodes (degree > 2), filter out junctions based on branch lengths, cycles, and artifacts
     junction_indices = np.where(degrees > 2)[0]
-    filtered_coords = filter_junctions_by_length(
+    coords_3way, coords_4way = filter_junctions_by_length(
         skeleton, junction_indices, degrees, verbose=verbose)
 
-    if filtered_coords.size == 0:
-        return np.empty((0, 2)), skeleton
-
     # Convert (y, x) to (x, y) to match image coordinate system
-    return filtered_coords[:, ::-1], skeleton
+    return coords_3way[:, ::-1], coords_4way[:, ::-1], skeleton

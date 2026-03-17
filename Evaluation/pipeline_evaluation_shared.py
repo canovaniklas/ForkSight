@@ -33,7 +33,8 @@ def plot_images_masks_junctions(
     predicted_mask: np.ndarray,
     groundtruth_mask: np.ndarray,
     comparison_mask: np.ndarray = None,
-    junction_coords: np.ndarray = None,
+    junction_coords_3way: np.ndarray = None,
+    junction_coords_4way: np.ndarray = None,
     skeleton: np.ndarray = None,
     ax=None,
     figsize=(10, 10),
@@ -71,9 +72,12 @@ def plot_images_masks_junctions(
         im = ax.imshow(prob_map, cmap='hot', alpha=0.5, vmin=0, vmax=1)
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label='Probability')
 
-    if junction_coords is not None:
-        ax.plot(junction_coords[:, 0], junction_coords[:, 1], 'ro',
-                markersize=20, markerfacecolor='none', markeredgewidth=2)
+    if junction_coords_3way is not None and len(junction_coords_3way) > 0:
+        ax.plot(junction_coords_3way[:, 0], junction_coords_3way[:, 1], 'o',
+                color='lime', markersize=20, markerfacecolor='none', markeredgewidth=2, label='3-way')
+    if junction_coords_4way is not None and len(junction_coords_4way) > 0:
+        ax.plot(junction_coords_4way[:, 0], junction_coords_4way[:, 1], 's',
+                color='red', markersize=20, markerfacecolor='none', markeredgewidth=2, label='4-way')
 
     if skeleton is not None:
         skel_overlay = np.zeros((*skeleton.shape, 4), dtype=np.uint8)
@@ -147,9 +151,9 @@ def evaluate_stitched_mask_and_plot(
     """
     bboxes = _postproc.extract_mask_elements_bboxes(pred_stitched)
 
-    pred_junction_coords, pred_skeleton = None, None
+    pred_junction_coords_3way, pred_junction_coords_4way, pred_skeleton = None, None, None
     if did_remove_small_objects:
-        pred_junction_coords, pred_skeleton = \
+        pred_junction_coords_3way, pred_junction_coords_4way, pred_skeleton = \
             _jd.detect_junctions_in_segmentation_mask(pred_stitched)
 
     comparison_overlay = None
@@ -180,7 +184,8 @@ def evaluate_stitched_mask_and_plot(
             missed_gt.numpy(),
             comparison_mask=comparison_overlay.numpy(
             ) if comparison_overlay is not None else None,
-            junction_coords=pred_junction_coords,
+            junction_coords_3way=pred_junction_coords_3way,
+            junction_coords_4way=pred_junction_coords_4way,
             skeleton=pred_skeleton,
             ax=ax,
             figsize=(10, 10),
@@ -287,7 +292,7 @@ def evaluate_soi_patch(
     cleaned = _postproc.remove_small_objects_from_batch(
         pred_mask.unsqueeze(0)).squeeze(0).detach().cpu()  # (1, H, W)
 
-    pred_junction_coords, pred_skeleton = \
+    pred_junction_coords_3way, pred_junction_coords_4way, pred_skeleton = \
         _jd.detect_junctions_in_segmentation_mask(cleaned)
 
     comparison_mask = (pred_mask == 1) & (cleaned == 0)
@@ -296,7 +301,8 @@ def evaluate_soi_patch(
     plot_images_masks_junctions(
         img_tensor, cleaned.numpy(), missed_gt.numpy(),
         comparison_mask=comparison_mask.numpy(),
-        junction_coords=pred_junction_coords,
+        junction_coords_3way=pred_junction_coords_3way,
+        junction_coords_4way=pred_junction_coords_4way,
         skeleton=pred_skeleton,
         figsize=(6, 6), plot_grid=False,
     )
