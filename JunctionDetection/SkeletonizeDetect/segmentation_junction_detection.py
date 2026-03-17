@@ -5,10 +5,16 @@ from skan.csr import skeleton_to_csgraph, summarize, Skeleton
 import networkx as nx
 
 
+# minimum length of significan branch for a junction
 MIN_BRANCH_LENGTH = 100
-MIN_JUNCTION_CONNECTOR_LENGTH = 10
+# upper length limit for a branch connecting two junctions to be considered part of a 4-way junction (H shape)
 MAX_JUNCTION_CONNECTOR_LENGTH = 20
+# terminal branches shorter than this are pruned (if a junction has multiple terminal branches, the longest is preserved to avoid over-pruning)
 MIN_TERMINAL_BRANCH_LENGTH = 40
+# junctions on cycles with total length below this are excluded, junctions on larger cycles may be valid
+MIN_CYCLE_LENGTH = 200
+# 4-way junctions within this distance of a VALID 3-way junction (replication fork) are suppressed
+MAX_3WAY_PRIORITY_DISTANCE = 30
 
 
 def skeletonize_mask(segmentation_mask: torch.Tensor) -> np.ndarray:
@@ -100,9 +106,16 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
     skel_stats = skel_stats[skel_stats['node-id-src']
                             != skel_stats['node-id-dst']]
 
-    # find all nodes in cycles
+    # find all nodes in small cycles (large cycles aren't excluded)
     nx_graph = nx.from_scipy_sparse_array(skel_obj.graph)
-    nodes_in_cycles = {n for cycle in nx.cycle_basis(nx_graph) for n in cycle}
+    nodes_in_cycles = set()
+    for cycle in nx.cycle_basis(nx_graph):
+        cycle_length = sum(
+            nx_graph[cycle[i]][cycle[(i + 1) % len(cycle)]].get('weight', 0)
+            for i in range(len(cycle))
+        )
+        if cycle_length < MIN_CYCLE_LENGTH:
+            nodes_in_cycles.update(cycle)
 
     valid_coords = []
     nodes_handled = set()
@@ -142,7 +155,7 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
         n1, n2 = int(branch['node-id-src']), int(branch['node-id-dst'])
 
         # check if short branch connects two junctions
-        if (degrees[n1] > 2 and degrees[n2] > 2 and branch['branch-distance'] < MAX_JUNCTION_CONNECTOR_LENGTH):
+        if (degrees[n1] > 2 and degrees[n2] > 2 and branch['branch-distance'] <= MAX_JUNCTION_CONNECTOR_LENGTH):
             if n1 in nodes_handled or n2 in nodes_handled:
                 continue
 
@@ -159,8 +172,8 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
             nof_significant_arms = sum(1 for _, arm in cluster_arms.iterrows()
                                        if arm['branch-distance'] >= MIN_BRANCH_LENGTH)
 
-            # if the cluster connected by the short branch has at least 4 significant arms, keep as junction
-            if nof_significant_arms >= 4:
+            # if the cluster connected by the short branch has 4 significant arms, keep as junction
+            if nof_significant_arms == 4:
                 midpoint = (
                     skel_obj.coordinates[n1] + skel_obj.coordinates[n2]) / 2
                 valid_coords.append(midpoint)
@@ -168,6 +181,7 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
             nodes_handled.update([n1, n2])
 
     # handle standard 3-way and 4-way junctions
+    junction_results = []
     for j_idx in junction_indices:
         if j_idx in nodes_handled or j_idx in nodes_in_cycles:
             continue
@@ -191,12 +205,12 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
                     nof_significant_arms += 1
                     significant_arms_to_junction.append(branch)
 
-        if nof_significant_arms >= 3:
-            valid_coords.append(skel_obj.coordinates[j_idx])
+        if nof_significant_arms == 3 or nof_significant_arms == 4:
+            junction_results.append((j_idx, skel_obj.coordinates[j_idx]))
 
             if verbose:
                 print(
-                    f"valid junction idx: {len(valid_coords)-1} at node {j_idx}")
+                    f"candidate junction at node {j_idx} (degree {degrees[j_idx]})")
                 print("significant arms by length:",
                       len(significant_arms_by_length))
                 for arm in significant_arms_by_length:
@@ -207,6 +221,29 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
                 for arm in significant_arms_to_junction:
                     print(
                         f"    length: {arm['branch-distance']}, nodes: {arm['node-id-src']}->{arm['node-id-dst']}, type: {arm['branch-type']}")
+
+    # suppress 4-way junctions that are close to a VALID 3-way junction (replication fork)
+    valid_3way_indices = {j_idx for j_idx,
+                          _ in junction_results if degrees[j_idx] == 3}
+    suppressed_by_3way = set()
+    for j_idx, _ in junction_results:
+        if degrees[j_idx] != 4:
+            continue
+        incident = skel_stats[(skel_stats['node-id-src'] == j_idx) |
+                              (skel_stats['node-id-dst'] == j_idx)]
+        for _, branch in incident.iterrows():
+            n1, n2 = int(branch['node-id-src']), int(branch['node-id-dst'])
+            other = n2 if n1 == j_idx else n1
+            if other in valid_3way_indices and branch['branch-distance'] <= MAX_3WAY_PRIORITY_DISTANCE:
+                suppressed_by_3way.add(j_idx)
+                break
+
+    for j_idx, coord in junction_results:
+        if j_idx not in suppressed_by_3way:
+            valid_coords.append(coord)
+            if verbose:
+                print(
+                    f"valid junction idx: {len(valid_coords)-1} at node {j_idx}")
 
     if not valid_coords:
         return np.empty((0, 2))
