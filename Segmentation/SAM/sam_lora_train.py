@@ -211,8 +211,6 @@ def save_params(sam_lora: SamLoRA, wandb_run, suffix: str = None):
 def init_data_loaders():
     train_heatmaps_dir = train_dir / HIGHRES_HEATMAP_PATCHES_DIR_NAME \
         if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
-    val_heatmaps_dir = val_dir / HIGHRES_HEATMAP_PATCHES_DIR_NAME \
-        if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
 
     train_dataset = SegmentationDataset(
         images_dir=TRAIN_IMAGES_DIR,
@@ -223,7 +221,7 @@ def init_data_loaders():
     val_dataset = SegmentationDataset(
         images_dir=VAL_IMAGES_DIR,
         masks_dir=VAL_MASKS_DIR,
-        heatmaps_dir=val_heatmaps_dir,
+        heatmaps_dir=None,  # for validation do not apply heatmap weighting, even if enabled
         downsample_size=DATASET_DOWNSAMPLE_SIZE)
 
     print("\nNumber of training samples:", len(train_dataset))
@@ -393,10 +391,9 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
         val_dice_scores = []
 
         with torch.no_grad():
-            for batched_input, target_masks, heatmap_weights in validationloader:
+            for batched_input, target_masks, _ in validationloader:
                 batched_input = batched_input.to(device)
                 target_masks = target_masks.to(device)
-                heatmap_weights = heatmap_weights.to(device)
                 batched_input_list = get_batched_input_list(batched_input)
 
                 outputs = sam_lora(batched_input=batched_input_list,
@@ -406,7 +403,7 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                 loss, _, _, _, _, _, _, _, _, _, _, _ = loss_fn(
                     output_logits,
                     target_masks,
-                    heatmap_weights if SAM_LORA_JUNCTION_HEATMAP_WEIGHT_SCALE > 0.0 else None
+                    None  # for validation do not apply heatmap weighting, even if enabled
                 )
                 total_validation_loss += loss.item() * len(batched_input_list)
 
@@ -415,7 +412,7 @@ def train(sam_lora: SamLoRA, wandb_run: wandb.Run, trainloader: DataLoader, vali
                     gt_mask = target_masks[i].squeeze().cpu()
 
                     dice, _, clDice, _, _ = compute_metrics(pred_mask, gt_mask)
-                    val_cldice_scores.append(clDice.item()) 
+                    val_cldice_scores.append(clDice.item())
                     val_dice_scores.append(dice.item())
 
         # epoch metrics
@@ -525,7 +522,8 @@ def train_evaluate():
         wandb_run = wandb.init(
             entity=WANDB_ENTITY,
             project=WANDB_SAM_PROJECT,
-            name=os.environ.get("WANDB_NAME", f"SAM_LoRA_Finetuning_{RUN_DATETIME_STR}"),
+            name=os.environ.get(
+                "WANDB_NAME", f"SAM_LoRA_Finetuning_{RUN_DATETIME_STR}"),
         )
 
         # --- Step 1: If sweep run, override globals from sweep-sampled config ---
