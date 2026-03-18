@@ -48,7 +48,7 @@ _PARAM_TO_ENV: dict[str, str] = {
 }
 
 
-def _build_env_overrides(best_config: dict) -> list[str]:
+def _build_env_overrides(best_config: dict, job_name: str) -> list[str]:
     """Convert a best-run config dict to KEY=value override strings for sbatch.
 
     finetuned_modules is expanded into the individual SAM_LORA_FINETUNE_*
@@ -78,6 +78,7 @@ def _build_env_overrides(best_config: dict) -> list[str]:
             overrides["SAM_LORA_FINETUNE_IMAGE_ENCODER_N_BLOCKS"] = str(
                 int(value))
 
+    overrides["WANDB_NAME"] = job_name
     return [f"{k}={v}" for k, v in overrides.items()]
 
 
@@ -94,10 +95,12 @@ def main(submit: bool) -> None:
     for sweep in sweeps:
         best = sweep.best_run()
 
+        job_name = f"{sweep.name}-BEST"
+
         sweep_params = set(sweep.config.get("parameters", {}).keys())
         best_config = {k: v for k, v in best.config.items()
                        if k in sweep_params}
-        env_overrides = _build_env_overrides(best_config)
+        env_overrides = _build_env_overrides(best_config, job_name)
 
         epochs = best.summary.get("epoch", "?")
         max_epochs = best.config.get(
@@ -110,7 +113,7 @@ def main(submit: bool) -> None:
 
         cmd = [
             "sbatch",
-            f"--job-name={sweep.name}-BEST",
+            f"--job-name={job_name}",
             SUBMIT_SCRIPT,
             *env_overrides,
         ]
