@@ -558,10 +558,10 @@ def train_evaluate():
                 DATASET_DOWNSAMPLE_SIZE = (
                     raw_ds, raw_ds) if raw_ds != 0 else None
 
-        print(
-            f"[sweep] Run {wandb_run.id} — overriding globals from sweep config:")
-        for k, v in sorted(cfg.items()):
-            print(f"  {k}: {v}")
+            print(
+                f"[sweep] Run {wandb_run.id} — overriding globals from sweep config:")
+            for k, v in sorted(cfg.items()):
+                print(f"  {k}: {v}")
 
         # --- Step 2: Record ALL hyperparameters (now final) to the run config ---
         wandb_run.config.update({
