@@ -1,10 +1,15 @@
-"""Evaluate SAM LoRA models on junction detection using full-size images.
+"""Evaluate fine-tuned SAM and nnUNet models on junction detection using full-size images.
 
-For each model run, predicts segmentation masks for full-size (4096×4096)
-images by splitting them into 16 1024×1024 patches, stitching predictions,
-and running postprocessing + junction detection on the stitched masks.
-Detected junctions are matched against ground-truth point annotations and
-per-image predictions and aggregate metrics are written to CSV.
+For each model, predicts segmentation masks for full-size (4096×4096) images by
+splitting them into 16 1024×1024 patches, stitching predictions, and running
+postprocessing + junction detection on the stitched masks.  Detected junctions
+are matched against ground-truth point annotations and per-image predictions and
+aggregate metrics are written to CSV.
+
+SAM models are downloaded from WANDB_SAM_PROJECT and run via the SAM LoRA
+inference pipeline.  nnUNet models are downloaded from WANDB_NNUNET_PROJECT as
+artifacts (uploaded by upload_nnunet_artifact_wandb.py) and run via
+predict_from_files(), which automatically uses the I/O class from plans.json.
 
 Required environment variables (loaded via load_forksight_env):
   JUNCTION_DETECTION_DATASET_DIR   root of the junction detection dataset
@@ -24,8 +29,10 @@ Usage:
 
 import argparse
 import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -40,6 +47,14 @@ from Segmentation.SAM.sam_lora_util import (
 from Segmentation.PostProcessing.segmentation_postprocessing import (
     postprocess_segmentation_masks,
 )
+from Segmentation.Util.nnunet_wandb_util import (
+    download_nnunet_artifact,
+    initialize_nnunet_predictor,
+    nnunet_model_key,
+    predict_image_patches_nnunet,
+    NNUNET_DEFAULT_FOLDS,
+    NNUNET_DEFAULT_CHECKPOINT,
+)
 from JunctionDetection.SkeletonizeDetect.segmentation_junction_detection import (
     detect_junctions_in_segmentation_mask,
 )
@@ -52,6 +67,7 @@ from Evaluation.pipeline_evaluation_shared import (
 from Evaluation.compute_metrics_config import (
     SAM_MODELS_RUNS,
     SAM_PARAMS_ARTIFACT_SUFFIX,
+    NNUNET_JUNCTION_MODELS,
 )
 
 _JUNCTION_TYPE_3_WAY = "3-way"
@@ -273,14 +289,18 @@ def _compute_metrics(
 
 
 def _process_image(
-    model,
+    infer_fn: Callable[[Path], torch.Tensor],
     image_path: Path,
-    device: torch.device,
-    batch_size: int,
     gt_annotations: list[dict],
     matching_threshold: float,
 ) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     """Run inference + junction detection for one full-size image.
+
+    Parameters
+    ----------
+    infer_fn : callable that receives the image path and returns a
+               (B, 1, H, W) binary float32 mask tensor on CPU, in
+               row-major patch order matching GRID_SIZE.
 
     Returns
     -------
@@ -289,9 +309,7 @@ def _process_image(
     pp_pred_rows   : prediction rows from the *post-processed* stitched mask.
     pp_fn_annots   : unmatched GT annotations (FNs) for the post-processed mask.
     """
-    patches, _ = load_full_image_as_patches(image_path)
-    pred_mask_patches, _ = predict_patches_batched(
-        model, patches, device, batch_size)
+    pred_mask_patches = infer_fn(image_path)
 
     raw_stitched, _ = postprocess_segmentation_masks(
         pred_mask_patches, grid_size=GRID_SIZE,
@@ -329,6 +347,90 @@ def _process_image(
     return raw_pred_rows, raw_fn_annots, pp_pred_rows, pp_fn_annots
 
 
+def _make_sam_infer_fn(
+    model,
+    device: torch.device,
+    batch_size: int,
+) -> Callable[[Path], torch.Tensor]:
+    def infer_fn(image_path: Path) -> torch.Tensor:
+        patches, _ = load_full_image_as_patches(image_path)
+        mask_patches, _ = predict_patches_batched(
+            model, patches, device, batch_size)
+        # (B, 1, H, W) on CPU
+        return mask_patches
+    return infer_fn
+
+
+def _make_nnunet_infer_fn(
+    predictor,
+) -> Callable[[Path], torch.Tensor]:
+    def infer_fn(image_path: Path) -> torch.Tensor:
+        return predict_image_patches_nnunet(
+            predictor, image_path,
+            patch_size=PATCH_SIZE[0],
+        )
+    return infer_fn
+
+
+def _evaluate_model(
+    model_key: str,
+    model_dataset: str,
+    infer_fn: Callable[[Path], torch.Tensor],
+    test_image_paths: list[Path],
+    gt_by_image: dict[str, list[dict]],
+    matching_threshold: float,
+    out_dir: Path,
+) -> dict:
+    """Run the full evaluation loop for one model and return a metrics row dict."""
+    raw_pred_rows_all: list[dict] = []
+    raw_fn_all: list[dict] = []
+    pp_pred_rows_all: list[dict] = []
+    pp_fn_all: list[dict] = []
+    pred_csv_rows: list[dict] = []
+
+    for img_path in test_image_paths:
+        stem = img_path.stem
+        gt_annotations = gt_by_image.get(stem, None)
+        if gt_annotations is None:
+            raise ValueError(
+                f"No GT annotations found for image stem '{stem}' in CSV.")
+
+        raw_preds, raw_fns, pp_preds, pp_fns = _process_image(
+            infer_fn, img_path, gt_annotations, matching_threshold,
+        )
+
+        raw_pred_rows_all.extend(raw_preds)
+        raw_fn_all.extend(raw_fns)
+        pp_pred_rows_all.extend(pp_preds)
+        pp_fn_all.extend(pp_fns)
+
+        for r in raw_preds + pp_preds:
+            pred_csv_rows.append({"image": stem, **r})
+
+    safe_name = model_key.replace("/", "_")
+    pred_df = pd.DataFrame(pred_csv_rows)
+    pred_path = out_dir / f"predictions_{safe_name}.csv"
+    pred_df.to_csv(pred_path, index=False)
+    print(f"\n  Saved predictions as {pred_path}")
+
+    raw_metrics = _compute_metrics(raw_pred_rows_all, raw_fn_all)
+    pp_metrics = _compute_metrics(pp_pred_rows_all, pp_fn_all)
+
+    print(f"\n  [raw]  loc P={raw_metrics['precision_loc']:.3f} "
+          f"R={raw_metrics['recall_loc']:.3f} F1={raw_metrics['f1_loc']:.3f} "
+          f"| type acc={raw_metrics['type_accuracy']:.3f}")
+    print(f"  [pp]   loc P={pp_metrics['precision_loc']:.3f} "
+          f"R={pp_metrics['recall_loc']:.3f} F1={pp_metrics['f1_loc']:.3f} "
+          f"| type acc={pp_metrics['type_accuracy']:.3f}")
+
+    row: dict = {"model": model_key, "dataset": model_dataset}
+    for k, v in raw_metrics.items():
+        row[f"raw_{k}"] = v
+    for k, v in pp_metrics.items():
+        row[f"pp_{k}"] = v
+    return row
+
+
 def _load_previous_metrics(base_dir: Path) -> pd.DataFrame:
     """Return the most recent metrics.csv across all timestamped sub-dirs of
     *base_dir*, or an empty DataFrame if none exists.
@@ -353,7 +455,7 @@ def main():
     parser.add_argument("--device", type=int, default=0,
                         help="CUDA device index (default: 0)")
     parser.add_argument("--batch-size", type=int, default=4,
-                        help="Patches per forward pass (default: 4)")
+                        help="Patches per SAM forward pass (default: 4)")
     parser.add_argument("--force-recompute", action="store_true",
                         help="Re-evaluate all models, ignoring cached results")
     args = parser.parse_args()
@@ -363,6 +465,8 @@ def main():
     EVALUATION_OUTPUT_DIR = os.getenv("EVALUATION_OUTPUT_DIR")
     WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
     WANDB_SAM_PROJECT = os.getenv("WANDB_SAM_PROJECT", "ForkSight-SAM")
+    WANDB_NNUNET_PROJECT = os.getenv(
+        "WANDB_NNUNET_PROJECT", "ForkSight-nnUNet")
     JUNCTION_DETECTION_DATASET_DIR = os.getenv(
         "JUNCTION_DETECTION_DATASET_DIR")
     JUNCTION_MATCHING_THRESHOLD = env_utils.load_as(
@@ -409,32 +513,33 @@ def main():
     computed_models = set(df_prev.index) if not df_prev.empty else set()
 
     api = wandb.Api()
-    all_runs = list(api.runs(f"{WANDB_ENTITY}/{WANDB_SAM_PROJECT}"))
-    runs_to_eval = [
-        r for r in all_runs
-        and r.state == "finished"
+    new_metrics_rows: list[dict] = []
+
+    # SAM LoRA models
+    all_sam_runs = list(api.runs(f"{WANDB_ENTITY}/{WANDB_SAM_PROJECT}"))
+    sam_runs_to_eval = [
+        r for r in all_sam_runs
+        if r.state == "finished"
         and r.name in SAM_MODELS_RUNS
         and r.name not in computed_models
     ]
 
-    if not runs_to_eval:
-        print("No new SAM models to evaluate, all results already cached.")
-        return
+    if not sam_runs_to_eval:
+        print("No new SAM models to evaluate.")
+    else:
+        print(f"\nWill evaluate {len(sam_runs_to_eval)} SAM model(s): "
+              + ", ".join(r.name for r in sam_runs_to_eval))
 
-    print(f"Will evaluate {len(runs_to_eval)} SAM model(s): "
-          + ", ".join(r.name for r in runs_to_eval))
-
-    new_metrics_rows: list[dict] = []
-
-    for run in runs_to_eval:
+    for run in sam_runs_to_eval:
         print(f"\n{'='*60}")
-        print(f"Evaluating: {run.name}")
+        print(f"Evaluating SAM: {run.name}")
         print(f"{'='*60}")
 
         run_artifacts = [a for a in run.logged_artifacts()
                          if a.type == "model"]
         artifact = next(
-            (a for a in run_artifacts if a.name.endswith(SAM_PARAMS_ARTIFACT_SUFFIX)),
+            (a for a in run_artifacts if a.name.endswith(
+                SAM_PARAMS_ARTIFACT_SUFFIX)),
             None,
         )
         if artifact is None:
@@ -447,60 +552,77 @@ def main():
         model = initialize_sam_lora_with_params(run.config, params, device)
         model.eval()
 
-        raw_pred_rows_all: list[dict] = []
-        raw_fn_all: list[dict] = []
-        pp_pred_rows_all: list[dict] = []
-        pp_fn_all: list[dict] = []
-        pred_csv_rows: list[dict] = []
-
-        for img_path in test_image_paths:
-            stem = img_path.stem
-            gt_annotations = gt_by_image.get(stem, None)
-            if gt_annotations is None:
-                raise ValueError(
-                    f"No GT annotations found for image stem '{stem}' in CSV.")
-
-            raw_preds, raw_fns, pp_preds, pp_fns = _process_image(
-                model, img_path, device, args.batch_size,
-                gt_annotations, JUNCTION_MATCHING_THRESHOLD,
-            )
-
-            raw_pred_rows_all.extend(raw_preds)
-            raw_fn_all.extend(raw_fns)
-            pp_pred_rows_all.extend(pp_preds)
-            pp_fn_all.extend(pp_fns)
-
-            for r in raw_preds + pp_preds:
-                pred_csv_rows.append({"image": stem, **r})
-
-        safe_name = run.name.replace("/", "_")
-        pred_df = pd.DataFrame(pred_csv_rows)
-        pred_path = out_dir / f"predictions_{safe_name}.csv"
-        pred_df.to_csv(pred_path, index=False)
-        print(f"\n  Saved predictions as {pred_path}")
-
-        raw_metrics = _compute_metrics(raw_pred_rows_all, raw_fn_all)
-        pp_metrics = _compute_metrics(pp_pred_rows_all, pp_fn_all)
-
-        row: dict = {"model": run.name,
-                     "dataset": run.config.get("dataset", "")}
-        for k, v in raw_metrics.items():
-            row[f"raw_{k}"] = v
-        for k, v in pp_metrics.items():
-            row[f"pp_{k}"] = v
+        infer_fn = _make_sam_infer_fn(model, device, args.batch_size)
+        row = _evaluate_model(
+            model_key=run.name,
+            model_dataset=run.config.get("dataset", ""),
+            infer_fn=infer_fn,
+            test_image_paths=test_image_paths,
+            gt_by_image=gt_by_image,
+            matching_threshold=JUNCTION_MATCHING_THRESHOLD,
+            out_dir=out_dir,
+        )
         new_metrics_rows.append(row)
-
-        print(f"\n  [raw]  loc P={raw_metrics['precision_loc']:.3f} "
-              f"R={raw_metrics['recall_loc']:.3f} F1={raw_metrics['f1_loc']:.3f} "
-              f"| type acc={raw_metrics['type_accuracy']:.3f}")
-        print(f"  [pp]   loc P={pp_metrics['precision_loc']:.3f} "
-              f"R={pp_metrics['recall_loc']:.3f} F1={pp_metrics['f1_loc']:.3f} "
-              f"| type acc={pp_metrics['type_accuracy']:.3f}")
 
         del model, params
         torch.cuda.empty_cache()
 
-    # Merge new results with any previously cached rows and save
+    # nnUNet models
+    nnunet_to_eval = [
+        (dataset, trainer)
+        for dataset, trainer in NNUNET_JUNCTION_MODELS
+        if nnunet_model_key(dataset, trainer) not in computed_models
+    ]
+
+    if not nnunet_to_eval:
+        print("\nNo new nnUNet models to evaluate.")
+    else:
+        print(f"\nWill evaluate {len(nnunet_to_eval)} nnUNet model(s): "
+              + ", ".join(nnunet_model_key(d, t) for d, t in nnunet_to_eval))
+
+    with tempfile.TemporaryDirectory(prefix="nnunet_jd_") as _tmproot:
+        tmp_root = Path(_tmproot)
+
+        for dataset, trainer in nnunet_to_eval:
+            model_key = nnunet_model_key(dataset, trainer)
+            print(f"\n{'='*60}")
+            print(f"Evaluating nnUNet: {model_key}")
+            print(f"{'='*60}")
+
+            print(f"  Downloading artifact from {WANDB_NNUNET_PROJECT}...")
+            model_dir = download_nnunet_artifact(
+                api, WANDB_ENTITY, WANDB_NNUNET_PROJECT,
+                dataset, trainer, tmp_root,
+            )
+            print(f"  Model dir: {model_dir}")
+
+            predictor = initialize_nnunet_predictor(
+                model_dir, device,
+                folds=NNUNET_DEFAULT_FOLDS,
+                checkpoint=NNUNET_DEFAULT_CHECKPOINT,
+            )
+
+            infer_fn = _make_nnunet_infer_fn(predictor)
+
+            row = _evaluate_model(
+                model_key=model_key,
+                model_dataset=dataset,
+                infer_fn=infer_fn,
+                test_image_paths=test_image_paths,
+                gt_by_image=gt_by_image,
+                matching_threshold=JUNCTION_MATCHING_THRESHOLD,
+                out_dir=out_dir,
+            )
+            new_metrics_rows.append(row)
+
+            del predictor
+            torch.cuda.empty_cache()
+
+    # Merge and save
+    if not new_metrics_rows:
+        print("\nNo new models evaluated, all results already cached.")
+        return
+
     df_new = pd.DataFrame(new_metrics_rows).set_index("model")
     if not df_prev.empty:
         df_new = pd.concat([df_prev, df_new])
