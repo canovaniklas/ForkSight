@@ -43,14 +43,6 @@ def overlay_mask(ax, mask: np.ndarray, color: np.ndarray = MASK_COLOR):
     ax.imshow(mask_rgba)
 
 
-def find_file(directory: Path, stem: str) -> Path | None:
-    """Find a file in directory whose stem matches, regardless of extension."""
-    for candidate in directory.iterdir():
-        if candidate.stem == stem:
-            return candidate
-    return None
-
-
 def make_output_filename(original_filename: str, patch: str | None) -> str:
     if patch:
         return f"{original_filename}_patch{str(patch).zfill(2)}"
@@ -72,15 +64,15 @@ def process_entry(
     patch = entry.get("patch") or None
     nnunet_case = entry["nnunet_case"]
 
-    img_path = find_file(images_dir, f"{nnunet_case}_0000")
-    if img_path is None:
+    img_path = images_dir / f"{nnunet_case}_0000.png"
+    if not img_path.exists():
         print(
             f"  [WARN] Original image not found for case '{nnunet_case}' in {images_dir}, skipping.")
         return
 
     # Locate predicted mask by nnunet_case stem
-    mask_path = find_file(masks_dir, nnunet_case)
-    if mask_path is None:
+    mask_path = masks_dir / f"{nnunet_case}.png"
+    if not mask_path.exists():
         print(
             f"  [WARN] Predicted mask not found for case '{nnunet_case}' in {masks_dir}, skipping.")
         return
@@ -124,10 +116,6 @@ def main():
             "JSON file with a list of dicts mapping nnUNet cases to original images. "
             'Expected keys: "original_filename", "patch", "nnunet_case", "split".'
         ),
-    )
-    parser.add_argument(
-        "--split", default=None,
-        help="If set, only process entries with this split value (e.g. 'test')."
     )
     args = parser.parse_args()
 
