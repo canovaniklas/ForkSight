@@ -1,7 +1,4 @@
-import os
-import sys
 from pathlib import Path
-
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -9,16 +6,9 @@ import torchvision.transforms as transforms
 from matplotlib import pyplot as plt
 from PIL import Image
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
-
-import Segmentation.PostProcessing.segmentation_postprocessing as _postproc
-import JunctionDetection.SkeletonizeDetect.segmentation_junction_detection as _jd
-from evaluation_util import (
-    format_score, hard_dice_score, iou_score, hard_clDice,
-    get_betti_at_thresholds, plot_betti_curve,
-    get_batched_input_list,
-)
+from Segmentation.PostProcessing.segmentation_postprocessing import extract_mask_elements_bboxes, postprocess_segmentation_masks, stitch_mask_tiles, remove_small_objects_from_batch
+from JunctionDetection.SkeletonizeDetect.segmentation_junction_detection import detect_junctions_in_segmentation_mask
+from Evaluation.evaluation_util import format_score, hard_dice_score, iou_score, hard_clDice, get_betti_at_thresholds, plot_betti_curve, get_batched_input_list
 
 
 PATCH_SIZE = (1024, 1024)
@@ -79,10 +69,10 @@ def plot_images_masks_junctions(
 
     if junction_coords_3way is not None and len(junction_coords_3way) > 0:
         ax.plot(junction_coords_3way[:, 0], junction_coords_3way[:, 1], 'o',
-                color='lime', markersize=20, markerfacecolor='none', markeredgewidth=2, label='3-way')
+                color='lime', markersize=20, markerfacecolor='none', markeredgewidth=1, label='3-way')
     if junction_coords_4way is not None and len(junction_coords_4way) > 0:
-        ax.plot(junction_coords_4way[:, 0], junction_coords_4way[:, 1], 's',
-                color='red', markersize=20, markerfacecolor='none', markeredgewidth=2, label='4-way')
+        ax.plot(junction_coords_4way[:, 0], junction_coords_4way[:, 1], 'o',
+                color='orange', markersize=20, markerfacecolor='none', markeredgewidth=1, label='4-way')
 
     if skeleton is not None:
         skel_overlay = np.zeros((*skeleton.shape, 4), dtype=np.uint8)
@@ -154,12 +144,12 @@ def evaluate_stitched_mask_and_plot(
     -------
     (dice, iou, clDice, tprec, tsens)
     """
-    bboxes = _postproc.extract_mask_elements_bboxes(pred_stitched)
+    bboxes = extract_mask_elements_bboxes(pred_stitched)
 
     pred_junction_coords_3way, pred_junction_coords_4way, pred_skeleton = None, None, None
     if did_remove_small_objects:
         pred_junction_coords_3way, pred_junction_coords_4way, pred_skeleton = \
-            _jd.detect_junctions_in_segmentation_mask(pred_stitched)
+            detect_junctions_in_segmentation_mask(pred_stitched)
 
     comparison_overlay = None
     if comparison_mask is not None:
@@ -232,10 +222,10 @@ def evaluate_full_image_patches(
     (result_with_removal, result_without_removal)
     Each result is a (dice, iou, clDice, tprec, tsens) tuple.
     """
-    pred_cleaned, _ = _postproc.postprocess_segmentation_masks(
+    pred_cleaned, _ = postprocess_segmentation_masks(
         patch_pred_masks, grid_size=grid_size,
         original_input_patch_img_size=patch_size, remove_small_objects=True)
-    pred_raw, _ = _postproc.postprocess_segmentation_masks(
+    pred_raw, _ = postprocess_segmentation_masks(
         patch_pred_masks, grid_size=grid_size,
         original_input_patch_img_size=patch_size, remove_small_objects=False)
 
@@ -258,7 +248,7 @@ def evaluate_full_image_patches(
 
     # Betti curves
     if output_probs is not None:
-        probs_stitched = _postproc.stitch_mask_tiles(
+        probs_stitched = stitch_mask_tiles(
             output_probs, grid_size=grid_size,
             original_input_patch_img_size=patch_size, as_uint=False)
         probs_np = probs_stitched.squeeze(0).detach().cpu().numpy()
@@ -294,11 +284,11 @@ def evaluate_soi_patch(
     img_tensor       : (3, H, W) input image for visualization.
     groundtruth_mask : (1, H, W) binary ground-truth mask.
     """
-    cleaned = _postproc.remove_small_objects_from_batch(
+    cleaned = remove_small_objects_from_batch(
         pred_mask.unsqueeze(0)).squeeze(0).detach().cpu()  # (1, H, W)
 
-    pred_junction_coords_3way, pred_junction_coords_4way, pred_skeleton = \
-        _jd.detect_junctions_in_segmentation_mask(cleaned)
+    pred_junction_coords_3way, pred_junction_coords_4way, pred_skeleton = detect_junctions_in_segmentation_mask(
+        cleaned)
 
     comparison_mask = (pred_mask == 1) & (cleaned == 0)
     missed_gt = (groundtruth_mask == 1) & (cleaned == 0)
@@ -336,7 +326,8 @@ def load_full_image_as_patches(
     img = Image.open(image_path)
     to_tensor = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Lambda(lambda t: t.repeat(3, 1, 1) if t.shape[0] == 1 else t),
+        transforms.Lambda(lambda t: t.repeat(3, 1, 1)
+                          if t.shape[0] == 1 else t),
     ])
     full_img = to_tensor(img)  # (3, H, W)
 
@@ -346,7 +337,8 @@ def load_full_image_as_patches(
     # Split into (C, rows, cols, pH, pW) using unfold, then rearrange
     patches = full_img.unfold(1, ph, ph).unfold(2, pw, pw)
     # (3, rows, cols, pH, pW) → (rows*cols, 3, pH, pW)
-    patches = patches.permute(1, 2, 0, 3, 4).contiguous().view(rows * cols, 3, ph, pw)
+    patches = patches.permute(1, 2, 0, 3, 4).contiguous().view(
+        rows * cols, 3, ph, pw)
 
     return patches, full_img
 
@@ -388,7 +380,8 @@ def predict_patches_batched(
                 input_size=(1024, 1024),
                 original_size=(1024, 1024),
             )
-            batch_probs.append(torch.sigmoid(resized).squeeze(0).detach().cpu())
+            batch_probs.append(torch.sigmoid(
+                resized).squeeze(0).detach().cpu())
 
         all_masks.append(masks)
         all_probs.append(torch.stack(batch_probs))

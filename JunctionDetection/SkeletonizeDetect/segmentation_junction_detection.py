@@ -12,7 +12,7 @@ MAX_JUNCTION_CONNECTOR_LENGTH = 20
 # terminal branches shorter than this are pruned (if a junction has multiple terminal branches, the longest is preserved to avoid over-pruning)
 MIN_TERMINAL_BRANCH_LENGTH = 40
 # junctions on cycles with total length below this are excluded, junctions on larger cycles may be valid
-MIN_CYCLE_LENGTH = 200
+MIN_CYCLE_LENGTH = 1000
 # 4-way junctions within this distance of a VALID 3-way junction (replication fork) are suppressed
 MAX_3WAY_PRIORITY_DISTANCE = 30
 

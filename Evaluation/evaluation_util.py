@@ -470,6 +470,7 @@ def collect_patch_metrics_and_betti(
     device,
     run_name: str,
     save_pd_dir: Path | None = None,
+    is_test: bool = False,
 ) -> tuple:
     """Run batched patch-level inference once, computing both segmentation
     metrics and per-patch persistence diagram data
@@ -506,12 +507,7 @@ def collect_patch_metrics_and_betti(
     run_dir = _setup_run_dir(save_pd_dir)
     accum = _make_accumulators()
 
-    batch_count = 0
     for images, gt_masks, _, patch_names in loader:
-        if batch_count == 2:
-            break
-        batch_count += 1
-
         batch_size = images.shape[0]
         input_list = get_batched_input_list(images.to(device))
         outputs = model(batched_input=input_list, multimask_output=False)
@@ -536,6 +532,10 @@ def collect_patch_metrics_and_betti(
                 output_masks[i], gt_masks[i], pp_masks[i], prob_maps[i],
                 run_name, accum, run_dir,
             )
+
+        # only run one batch in test mode
+        if is_test:
+            break
 
     return _aggregate_results(accum)
 
@@ -734,6 +734,7 @@ def collect_patch_metrics_and_betti_from_masks(
     pred_mask_dir: Path,
     run_name: str,
     save_pd_dir: Path | None = None,
+    is_test: bool = False,
 ) -> tuple:
     """Compute patch-level segmentation metrics and persistence diagrams by
     loading pre-computed binary prediction masks from a directory.
@@ -768,10 +769,11 @@ def collect_patch_metrics_and_betti_from_masks(
     run_dir = _setup_run_dir(save_pd_dir)
     accum = _make_accumulators()
 
-    gt_index = {p.stem: p for p in gt_mask_dir.iterdir() if p.is_file()}
+    gt_index = {p.stem: p for p in gt_mask_dir.iterdir() if p.is_file()
+                and p.suffix == ".png"}
     pred_files = sorted(
         p for p in pred_mask_dir.iterdir()
-        if p.is_file() and p.suffix != ".npz"
+        if p.is_file() and p.suffix == ".png"
     )
 
     for pred_path in pred_files:
@@ -782,9 +784,9 @@ def collect_patch_metrics_and_betti_from_masks(
                 f"  [WARN] No ground-truth found for prediction '{case}', skipping.")
             continue
 
-        pred = _load_binary_mask_tensor(pred_path)   # (1, H, W)
-        gt = _load_binary_mask_tensor(gt_path)        # (1, H, W)
-        pp_pred = remove_small_objects_from_batch(pred.unsqueeze(0)).squeeze(0)
+        pred = _load_binary_mask_tensor(pred_path)                              # (1, H, W)
+        gt = _load_binary_mask_tensor(gt_path)                                  # (1, H, W)
+        pp_pred = remove_small_objects_from_batch(pred.unsqueeze(0)).squeeze(0) # (1, H, W)
 
         npz_path = pred_path.parent / f"{case}.npz"
         npz_data = np.load(npz_path)
@@ -795,6 +797,10 @@ def collect_patch_metrics_and_betti_from_masks(
 
         _process_patch(case, pred, gt, pp_pred, prob_map,
                        run_name, accum, run_dir)
+
+        # only run one patch in test mode
+        if is_test:
+            break
 
     return _aggregate_results(accum)
 
