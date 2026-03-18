@@ -101,6 +101,8 @@ def _match_predictions_to_gt(
 ) -> tuple[list[dict], list[dict]]:
     """Greedy nearest-neighbour matching of predicted junctions to GT.
 
+    Matching is purely spatial (type-agnostic): a prediction matches a GT
+    junction if it is within the distance threshold, regardless of type.
     Each GT can be matched at most once; if multiple predictions are within
     the threshold of the same GT, the closest one wins and the rest become
     false positives.
@@ -131,15 +133,14 @@ def _match_predictions_to_gt(
     diff = pred_coords[:, None, :] - gt_coords[None, :, :]  # (N_pred, N_gt, 2)
     dist_matrix = np.linalg.norm(diff, axis=2)              # (N_pred, N_gt)
 
-    # Collect all candidate (pred, gt) pairs within the threshold and with
-    # matching junction type, sorted by distance so the greedy loop below
-    # always assigns the closest pair first
+    # Collect all candidate (pred, gt) pairs within the threshold,
+    # sorted by distance so the greedy loop always assigns the closest first.
+    # Matching is type-agnostic; type correctness is evaluated separately.
     candidate_pairs = sorted(
         (dist_matrix[pred_idx, gt_idx], pred_idx, gt_idx)
         for pred_idx in range(n_pred)
         for gt_idx in range(n_gt)
         if dist_matrix[pred_idx, gt_idx] <= threshold
-        and pred_types[pred_idx] == gt_annotations[gt_idx]["type"]
     )
 
     # Greedy one-to-one assignment: each prediction and each GT can be matched
@@ -191,9 +192,11 @@ def _compute_metrics(
 ) -> dict:
     """Compute aggregate junction detection metrics across all images.
 
-    Because matching is type-constrained (3-way predictions only match 3-way GT
-    and vice versa), per-type and overall detection metrics are consistent:
-    overall TP/FP/FN equal the sum of per-type counts.
+    Matching is type-agnostic (spatial only), so localization and type
+    classification are evaluated independently:
+      - Localization: TP/FP/FN/precision/recall/F1 based on spatial matching.
+      - Type classification: accuracy and per-type confusion counts computed
+        only on spatially matched (TP) pairs.
 
     Parameters
     ----------
@@ -210,34 +213,62 @@ def _compute_metrics(
         f1 = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
         return prec, rec, f1
 
-    # Because types are never mixed during matching:
-    #   TP for a type = spatially matched prediction of that type
-    #   FP for a type = unmatched prediction of that type
-    #   FN for a type = unmatched GT of that type
     metrics: dict = {}
-    for jtype in (_JUNCTION_TYPE_3_WAY, _JUNCTION_TYPE_4_WAY):
-        tp_t = sum(
-            1 for r in all_pred_rows if r["is_tp"] and r["pred_type"] == jtype)
-        fp_t = sum(
-            1 for r in all_pred_rows if r["is_fp"] and r["pred_type"] == jtype)
-        fn_t = sum(1 for a in all_fn_annotations if a["type"] == jtype)
-        prec_t, rec_t, f1_t = _compute_precision_recall_f1(tp_t, fp_t, fn_t)
-        tag = jtype.replace("-", "")
-        metrics.update({
-            f"tp_{tag}": tp_t, f"fp_{tag}": fp_t, f"fn_{tag}": fn_t,
-            f"precision_{tag}": prec_t, f"recall_{tag}": rec_t, f"f1_{tag}": f1_t,
-        })
 
-    # Overall detection (sum of per-type counts)
-    tp_det = sum(1 for r in all_pred_rows if r["is_tp"])
-    fp_det = sum(1 for r in all_pred_rows if r["is_fp"])
-    fn_det = len(all_fn_annotations)
-    prec_det, rec_det, f1_det = _compute_precision_recall_f1(
-        tp_det, fp_det, fn_det)
+    # Localization metrics (type-agnostic)
+    tp_loc = sum(1 for r in all_pred_rows if r["is_tp"])
+    fp_loc = sum(1 for r in all_pred_rows if r["is_fp"])
+    fn_loc = len(all_fn_annotations)
+    prec_loc, rec_loc, f1_loc = _compute_precision_recall_f1(
+        tp_loc, fp_loc, fn_loc)
     metrics.update({
-        "tp_det": tp_det, "fp_det": fp_det, "fn_det": fn_det,
-        "precision_det": prec_det, "recall_det": rec_det, "f1_det": f1_det,
+        "tp_loc": tp_loc, "fp_loc": fp_loc, "fn_loc": fn_loc,
+        "precision_loc": prec_loc, "recall_loc": rec_loc, "f1_loc": f1_loc,
     })
+
+    # Type classification metrics (on spatially matched pairs only)
+    matched_rows = [r for r in all_pred_rows if r["is_tp"]]
+    type_correct = sum(
+        1 for r in matched_rows if r["pred_type"] == r["matched_gt_type"])
+    type_incorrect = tp_loc - type_correct
+    type_accuracy = type_correct / tp_loc if tp_loc > 0 else 0.0
+
+    # 2x2 confusion matrix: rows = GT type, columns = predicted type
+    cm_3way_3way = sum(1 for r in matched_rows
+                       if r["matched_gt_type"] == _JUNCTION_TYPE_3_WAY
+                       and r["pred_type"] == _JUNCTION_TYPE_3_WAY)
+    cm_3way_4way = sum(1 for r in matched_rows
+                       if r["matched_gt_type"] == _JUNCTION_TYPE_3_WAY
+                       and r["pred_type"] == _JUNCTION_TYPE_4_WAY)
+    cm_4way_3way = sum(1 for r in matched_rows
+                       if r["matched_gt_type"] == _JUNCTION_TYPE_4_WAY
+                       and r["pred_type"] == _JUNCTION_TYPE_3_WAY)
+    cm_4way_4way = sum(1 for r in matched_rows
+                       if r["matched_gt_type"] == _JUNCTION_TYPE_4_WAY
+                       and r["pred_type"] == _JUNCTION_TYPE_4_WAY)
+
+    # Per-type precision/recall/f1 derived from confusion matrix
+    prec_3way, rec_3way, f1_3way = _compute_precision_recall_f1(
+        cm_3way_3way, cm_4way_3way, cm_3way_4way)
+    prec_4way, rec_4way, f1_4way = _compute_precision_recall_f1(
+        cm_4way_4way, cm_3way_4way, cm_4way_3way)
+
+    metrics.update({
+        "type_correct": type_correct,
+        "type_incorrect": type_incorrect,
+        "type_accuracy": type_accuracy,
+        "cm_gt3_pred3": cm_3way_3way,
+        "cm_gt3_pred4": cm_3way_4way,
+        "cm_gt4_pred3": cm_4way_3way,
+        "cm_gt4_pred4": cm_4way_4way,
+        "type_precision_3way": prec_3way,
+        "type_recall_3way": rec_3way,
+        "type_f1_3way": f1_3way,
+        "type_precision_4way": prec_4way,
+        "type_recall_4way": rec_4way,
+        "type_f1_4way": f1_4way,
+    })
+
     return metrics
 
 
@@ -459,10 +490,12 @@ def main():
             row[f"pp_{k}"] = v
         new_metrics_rows.append(row)
 
-        print(f"\n  [raw]  det P={raw_metrics['precision_det']:.3f} "
-              f"R={raw_metrics['recall_det']:.3f} F1={raw_metrics['f1_det']:.3f}")
-        print(f"  [pp]   det P={pp_metrics['precision_det']:.3f} "
-              f"R={pp_metrics['recall_det']:.3f} F1={pp_metrics['f1_det']:.3f}")
+        print(f"\n  [raw]  loc P={raw_metrics['precision_loc']:.3f} "
+              f"R={raw_metrics['recall_loc']:.3f} F1={raw_metrics['f1_loc']:.3f} "
+              f"| type acc={raw_metrics['type_accuracy']:.3f}")
+        print(f"  [pp]   loc P={pp_metrics['precision_loc']:.3f} "
+              f"R={pp_metrics['recall_loc']:.3f} F1={pp_metrics['f1_loc']:.3f} "
+              f"| type acc={pp_metrics['type_accuracy']:.3f}")
 
         del model, params
         torch.cuda.empty_cache()
