@@ -17,14 +17,14 @@ echo ""
 # --- Stage 1: nnUNet inference ---
 NNUNET_JOB=$(sbatch --parsable \
     --job-name="junc-infer-nnunet" \
-    --export=STAGE=nnunet \
+    --export=ALL,STAGE=nnunet \
     "$JOB_SCRIPT")
 echo "Stage 1 (nnunet inference): job ${NNUNET_JOB}"
 
 # --- Stage 2: SAM inference (waits for nnUNet) ---
 SAM_JOB=$(sbatch --parsable \
     --job-name="junc-infer-sam" \
-    --export=STAGE=sam \
+    --export=ALL,STAGE=sam \
     --dependency=afterok:"${NNUNET_JOB}" \
     "$JOB_SCRIPT")
 echo "Stage 2 (sam inference):   job ${SAM_JOB} (waits for job ${NNUNET_JOB})"
@@ -34,7 +34,7 @@ METRICS_JOB=$(sbatch --parsable \
     --job-name="junc-metrics" \
     --gres="" --gpus=0 \
     --constraint="" \
-    --export=STAGE=metrics \
+    --export=ALL,STAGE=metrics \
     --dependency=afterok:"${SAM_JOB}" \
     "$JOB_SCRIPT")
 echo "Stage 3 (metrics):         job ${METRICS_JOB} (waits for job ${SAM_JOB})"
