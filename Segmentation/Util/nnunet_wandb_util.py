@@ -11,24 +11,6 @@ Naming conventions:
     nnUNet folder:   {trainer}__nnUNetPlans__2d
     WandB artifact:  nnunet-{dataset}-{trainer}
     metrics CSV key: nnunet/{dataset}/{trainer}
-
-Inference approach:
-    predict_from_list_of_npy_arrays() is used for fully in-memory inference.
-    predict_single_npy_array() is documented as SLOW and only processes one image at a
-    time; predict_from_files() is the recommended batch mode but requires writing patches
-    to disk and reading them back.
-
-    predict_from_list_of_npy_arrays() avoids all disk I/O by accepting numpy arrays
-    directly.  The arrays must be in the format produced by the I/O class recorded in
-    plans.json under "image_reader_writer".  predict_image_patches_nnunet() assumes
-    NaturalImage2DIO (the standard reader for 2D PNG datasets) and verifies this at
-    runtime against predictor.plans_manager.image_reader_writer_class.
-
-    NaturalImage2DIO format: (C, H, W) float32, raw pixel values (0-255 for uint8 images),
-    properties = {'spacing': (999, 1, 1)}.
-
-    All B = rows*cols patches are submitted in a single call, which is nnUNet's batch
-    mode and lets nnUNet handle its own internal preprocessing pipeline.
 """
 
 from __future__ import annotations
@@ -111,53 +93,3 @@ def initialize_nnunet_predictor(
         checkpoint_name=checkpoint,
     )
     return predictor
-
-
-def predict_image_patches_nnunet(
-    predictor: nnUNetPredictor,
-    image_path: Path,
-    patch_size: int = 1024,
-) -> torch.Tensor:
-    """Split a full-resolution image into patches and run nnUNet inference.
-
-    Uses create_patches_from_img() for patch extraction, saves patches to a
-    temporary directory, and calls predict_from_files() which resolves the
-    correct I/O class from plans.json automatically.
-
-    Returns (B, 1, H, W) binary float32 mask tensor on CPU, in the same
-    row-major patch order as create_patches_from_img().
-    """
-    patches = create_patches_from_img(image_path, patch_size=patch_size)
-    B = patches.shape[0]
-
-    tmp_dir = Path(tempfile.mkdtemp(prefix="nnunet_patches_"))
-    inp_dir = tmp_dir / "inp"
-    out_dir = tmp_dir / "out"
-    inp_dir.mkdir()
-    out_dir.mkdir()
-
-    for idx in range(B):
-        TF.to_pil_image(patches[idx]).save(
-            inp_dir / f"patch_{idx:04d}_0000.png")
-
-    predictor.predict_from_files(
-        [[str(inp_dir / f"patch_{idx:04d}_0000.png")] for idx in range(B)],
-        str(out_dir),
-        save_probabilities=False,
-        overwrite=True,
-        num_processes_preprocessing=2,
-        num_processes_segmentation_export=2,
-    )
-
-    masks = []
-    for idx in range(B):
-        seg = np.array(PILImage.open(
-            out_dir / f"patch_{idx:04d}.png"))
-        if seg.ndim == 3:
-            seg = seg[..., 0]
-        masks.append(torch.from_numpy(
-            (seg > 0).astype(np.float32)).unsqueeze(0))
-
-    shutil.rmtree(tmp_dir, ignore_errors=True)
-    # (B, 1, H, W)
-    return torch.stack(masks)
