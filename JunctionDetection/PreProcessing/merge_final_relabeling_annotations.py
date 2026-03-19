@@ -28,6 +28,7 @@ def strip_float_suffix(label: str) -> str:
 
 
 def load_final_json(path: str) -> pd.DataFrame:
+    """Load Label Studio JSON annotations and convert x/y from percentages to pixel coords."""
     with open(path, "r") as f:
         data = json.load(f)
 
@@ -39,9 +40,11 @@ def load_final_json(path: str) -> pd.DataFrame:
 
         for annotation in entry.get("annotations", []):
             for result in annotation.get("result", []):
+                orig_w = result.get("original_width")
+                orig_h = result.get("original_height")
                 value = result.get("value", {})
-                x = value.get("x")
-                y = value.get("y")
+                x_pct = value.get("x")
+                y_pct = value.get("y")
                 keypointlabels = value.get("keypointlabels", [])
                 if not keypointlabels:
                     continue
@@ -49,6 +52,9 @@ def load_final_json(path: str) -> pd.DataFrame:
                 if label == "Unsure":
                     label = "Negative"
                     x = y = None
+                else:
+                    x = x_pct / 100 * orig_w
+                    y = y_pct / 100 * orig_h
                 rows.append({
                     "image": image_name,
                     "label": label,
@@ -139,10 +145,7 @@ def plot_junctions(df: pd.DataFrame, junction_detection_dir: Path):
         ax.imshow(img, cmap="gray" if img.ndim == 2 else None)
 
         for _, row in points.iterrows():
-            if row["source"] == "json":
-                px, py = row["x"] * 1024 / 100, row["y"] * 1024 / 100
-            else:
-                px, py = row["x"] * scale_x, row["y"] * scale_y
+            px, py = row["x"] * scale_x, row["y"] * scale_y
             ax.plot(px, py, "o", color="none", markersize=40, markeredgewidth=3,
                     markeredgecolor="red")
 
