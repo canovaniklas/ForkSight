@@ -483,7 +483,7 @@ def main():
     if JUNCTION_PRED_DIR is None:
         raise ValueError("JUNCTION_PRED_DIR environment variable must be set.")
 
-    test_dir = Path(JUNCTION_DETECTION_DATASET_DIR) / "test"
+    test_dir = Path(JUNCTION_DETECTION_DATASET_DIR)
     test_images_dir = test_dir / "images"
     test_labels_csv = test_dir / "relabeling_data.csv"
 

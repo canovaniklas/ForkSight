@@ -78,7 +78,8 @@ def main():
 
     env_utils.load_forksight_env()
 
-    JUNCTION_DETECTION_DATASET_DIR = os.getenv("JUNCTION_DETECTION_DATASET_DIR")
+    JUNCTION_DETECTION_DATASET_DIR = os.getenv(
+        "JUNCTION_DETECTION_DATASET_DIR")
     JUNCTION_PRED_DIR = os.getenv("JUNCTION_PRED_DIR")
     WANDB_ENTITY = os.getenv("WANDB_ENTITY", "EM_IMCR_BIOVSION")
     WANDB_SAM_PROJECT = os.getenv("WANDB_SAM_PROJECT", "ForkSight-SAM")
@@ -89,8 +90,7 @@ def main():
     if JUNCTION_PRED_DIR is None:
         raise ValueError("JUNCTION_PRED_DIR environment variable must be set.")
 
-    test_images_dir = (
-        Path(JUNCTION_DETECTION_DATASET_DIR) / "test" / "images")
+    test_images_dir = (Path(JUNCTION_DETECTION_DATASET_DIR) / "images")
     if not test_images_dir.is_dir():
         raise FileNotFoundError(
             f"Test images directory not found: {test_images_dir}")

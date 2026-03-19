@@ -79,8 +79,7 @@ def main():
     if JUNCTION_PRED_DIR is None:
         raise ValueError("JUNCTION_PRED_DIR environment variable must be set.")
 
-    test_images_dir = (
-        Path(JUNCTION_DETECTION_DATASET_DIR) / "test" / "images")
+    test_images_dir = (Path(JUNCTION_DETECTION_DATASET_DIR) / "images")
     if not test_images_dir.is_dir():
         raise FileNotFoundError(
             f"Test images directory not found: {test_images_dir}")
