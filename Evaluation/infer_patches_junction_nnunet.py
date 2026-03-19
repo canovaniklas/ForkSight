@@ -3,9 +3,8 @@
 Run this script in the nnUNet conda environment.  For each configured nnUNet
 model and each test image, it downloads the model artifact from WandB, splits
 the full images into patches, and calls predict_from_files() with the patch
-PNGs as inputs.  nnUNet writes binary mask PNGs directly to the model
-prediction directory with the correct naming, so no post-processing or
-re-saving is required.
+PNGs as inputs.  nnUNet writes class-label PNGs (0/1); these are converted
+in-place to 0/255 to match the SAM inference output format.
 
 Output layout under JUNCTION_PRED_DIR:
   <JUNCTION_PRED_DIR>/
@@ -32,7 +31,9 @@ import os
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import torch
+from PIL import Image
 import torchvision.transforms.functional as TF
 import wandb
 
@@ -165,6 +166,11 @@ def main():
                 num_processes_preprocessing=2,
                 num_processes_segmentation_export=2,
             )
+
+            # nnUNet saves class-label PNGs (0/1); convert to 0/255 to match SAM output
+            for png in model_pred_dir.glob("*.png"):
+                arr = np.array(Image.open(png))
+                Image.fromarray((arr * 255).astype(np.uint8)).save(png)
 
             del predictor
             torch.cuda.empty_cache()
