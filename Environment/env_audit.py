@@ -5,6 +5,7 @@ Outputs:
   1. Variables in .env but NOT documented in README.md
   2. Variables in README.md but NOT present in .env
   3. Variables in .env but NOT referenced in any .py or .ipynb file
+  4. Variables loaded in code (os.getenv, env_utils helpers) but NOT in .env or README
 
 Usage:
     python env_audit.py [--env .env] [--readme README.md] [--repo .]
@@ -114,6 +115,35 @@ def extract_text_from_file(filepath: Path) -> str:
     return raw
 
 
+def find_code_loaded_vars(repo_root: str) -> list[str]:
+    """
+    Return all unique env variable names loaded in source files via:
+      - os.getenv("VAR")
+      - os.environ["VAR"] or os.environ.get("VAR")
+      - load_as_tuple("VAR"), load_as("VAR"), load_as_bool("VAR")
+    """
+    # Patterns: each captures the variable name as group 1
+    patterns = [
+        re.compile(r'os\.getenv\s*\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']'),
+        re.compile(r'os\.environ(?:\.get)?\s*[\[(\s]\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']'),
+        re.compile(r'load_as(?:_tuple|_bool)?\s*\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']'),
+    ]
+
+    seen: set[str] = set()
+    found: list[str] = []
+
+    for filepath in find_source_files(repo_root):
+        text = extract_text_from_file(filepath)
+        for pattern in patterns:
+            for match in pattern.finditer(text):
+                var = match.group(1)
+                if var not in seen:
+                    seen.add(var)
+                    found.append(var)
+
+    return sorted(found)
+
+
 def find_unused_vars(env_vars: list[str], repo_root: str) -> list[str]:
     """Return env vars that are never referenced in any .py or .ipynb file."""
     source_files = find_source_files(repo_root)
@@ -182,6 +212,15 @@ def main():
     # 3. In .env but not used in any .py / .ipynb
     unused = find_unused_vars(env_vars, args.repo)
     print_section("3. In .env but NOT used in any .py/.ipynb file", unused)
+
+    # 4. Loaded in code but not declared in .env or README
+    code_vars = find_code_loaded_vars(args.repo)
+    known_vars = env_set | readme_set
+    undeclared = [v for v in code_vars if v not in known_vars]
+    print_section(
+        "4. Loaded in code (os.getenv / env_utils) but NOT in .env or README",
+        undeclared,
+    )
 
     print()
 
