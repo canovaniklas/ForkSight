@@ -33,7 +33,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
-
+from matplotlib import pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
@@ -60,14 +60,15 @@ from JunctionDetection.SkeletonizeDetect.segmentation_junction_detection import 
 )
 from Evaluation.pipeline_evaluation_shared import (
     load_full_image_as_patches,
+    plot_images_masks_junctions,
     predict_patches_batched,
     PATCH_SIZE,
     GRID_SIZE,
 )
 from Evaluation.compute_metrics_config import (
+    NNUNET_EVALUATIONS,
     SAM_MODELS_RUNS,
     SAM_PARAMS_ARTIFACT_SUFFIX,
-    NNUNET_JUNCTION_MODELS,
 )
 
 _JUNCTION_TYPE_3_WAY = "3-way"
@@ -339,12 +340,14 @@ def _process_image(
         )
         for r in pred_rows:
             r["source"] = source
-        return pred_rows, fn_annots
+        return pred_rows, fn_annots, coords_3way, coords_4way
 
-    raw_pred_rows, raw_fn_annots = _detect_and_match(raw_stitched, "raw")
-    pp_pred_rows, pp_fn_annots = _detect_and_match(pp_stitched, "pp")
+    raw_pred_rows, raw_fn_annots, _, _ = _detect_and_match(raw_stitched, "raw")
+    pp_pred_rows, pp_fn_annots, pp_coords_3way, pp_coords_4way = _detect_and_match(
+        pp_stitched, "pp")
 
-    return raw_pred_rows, raw_fn_annots, pp_pred_rows, pp_fn_annots
+    return raw_pred_rows, raw_fn_annots, pp_pred_rows, pp_fn_annots, \
+        pp_stitched, pp_coords_3way, pp_coords_4way
 
 
 def _make_sam_infer_fn(
@@ -372,6 +375,53 @@ def _make_nnunet_infer_fn(
     return infer_fn
 
 
+def _save_junction_detection_plot(
+    full_img: torch.Tensor,
+    pp_stitched: torch.Tensor,
+    coords_3way: np.ndarray,
+    coords_4way: np.ndarray,
+    gt_annotations: list[dict],
+    plot_path: Path,
+    title: str = "",
+) -> None:
+    """Save a full-image plot: stitched image + pp mask overlay + junction circles.
+
+    Predicted 3-way: lime open circles.  Predicted 4-way: orange open circles.
+    GT 3-way: lime Xs.  GT 4-way: orange Xs.
+    """
+
+    fig, ax = plt.subplots(figsize=(14, 14))
+    if title:
+        ax.set_title(title, fontsize=10)
+
+    plot_images_masks_junctions(
+        full_img,
+        predicted_mask=pp_stitched.numpy(),
+        groundtruth_mask=None,
+        junction_coords_3way=coords_3way if len(coords_3way) > 0 else None,
+        junction_coords_4way=coords_4way if len(coords_4way) > 0 else None,
+        ax=ax,
+        plot_grid=False,
+    )
+
+    # GT junctions as small Xs
+    gt_3way = np.array([[a["x"], a["y"]] for a in gt_annotations
+                        if a["type"] == _JUNCTION_TYPE_3_WAY])
+    gt_4way = np.array([[a["x"], a["y"]] for a in gt_annotations
+                        if a["type"] == _JUNCTION_TYPE_4_WAY])
+    if len(gt_3way) > 0:
+        ax.plot(gt_3way[:, 0], gt_3way[:, 1], "x",
+                color="lime", markersize=8, markeredgewidth=1, label="GT 3-way")
+    if len(gt_4way) > 0:
+        ax.plot(gt_4way[:, 0], gt_4way[:, 1], "x",
+                color="orange", markersize=8, markeredgewidth=1, label="GT 4-way")
+
+    ax.legend(loc="upper right", fontsize=8)
+    plt.tight_layout()
+    fig.savefig(plot_path, bbox_inches="tight", dpi=100)
+    plt.close(fig)
+
+
 def _evaluate_model(
     model_key: str,
     model_dataset: str,
@@ -380,6 +430,8 @@ def _evaluate_model(
     gt_by_image: dict[str, list[dict]],
     matching_threshold: float,
     out_dir: Path,
+    is_test: bool = False,
+    plot_dir: Path | None = None,
 ) -> dict:
     """Run the full evaluation loop for one model and return a metrics row dict."""
     raw_pred_rows_all: list[dict] = []
@@ -388,6 +440,9 @@ def _evaluate_model(
     pp_fn_all: list[dict] = []
     pred_csv_rows: list[dict] = []
 
+    if plot_dir is not None:
+        plot_dir.mkdir(parents=True, exist_ok=True)
+
     for img_path in test_image_paths:
         stem = img_path.stem
         gt_annotations = gt_by_image.get(stem, None)
@@ -395,9 +450,10 @@ def _evaluate_model(
             raise ValueError(
                 f"No GT annotations found for image stem '{stem}' in CSV.")
 
-        raw_preds, raw_fns, pp_preds, pp_fns = _process_image(
-            infer_fn, img_path, gt_annotations, matching_threshold,
-        )
+        raw_preds, raw_fns, pp_preds, pp_fns, \
+            pp_stitched, pp_coords_3way, pp_coords_4way = _process_image(
+                infer_fn, img_path, gt_annotations, matching_threshold,
+            )
 
         raw_pred_rows_all.extend(raw_preds)
         raw_fn_all.extend(raw_fns)
@@ -406,6 +462,19 @@ def _evaluate_model(
 
         for r in raw_preds + pp_preds:
             pred_csv_rows.append({"image": stem, **r})
+
+        if plot_dir is not None:
+            _, full_img = load_full_image_as_patches(img_path)
+            _save_junction_detection_plot(
+                full_img, pp_stitched,
+                pp_coords_3way, pp_coords_4way,
+                gt_annotations,
+                plot_dir / f"{stem}.png",
+                title=f"{model_key} — {stem}",
+            )
+
+        if is_test:
+            break
 
     safe_name = model_key.replace("/", "_")
     pred_df = pd.DataFrame(pred_csv_rows)
@@ -458,6 +527,10 @@ def main():
                         help="Patches per SAM forward pass (default: 4)")
     parser.add_argument("--force-recompute", action="store_true",
                         help="Re-evaluate all models, ignoring cached results")
+    parser.add_argument("--is-test", action="store_true",
+                        help="Break after computing metrics for the first image")
+    parser.add_argument("--plot", action="store_true",
+                        help="Save stitched-image plots with junction circles per model")
     args = parser.parse_args()
 
     env_utils.load_forksight_env()
@@ -506,6 +579,7 @@ def main():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = out_base / timestamp
     out_dir.mkdir(parents=True, exist_ok=True)
+    _PLOT_DIR = out_dir / "plots" if args.plot else None
 
     # Load previously computed metrics to skip already-evaluated models
     df_prev = _load_previous_metrics(
@@ -553,6 +627,7 @@ def main():
         model.eval()
 
         infer_fn = _make_sam_infer_fn(model, device, args.batch_size)
+        safe_name = run.name.replace("/", "_")
         row = _evaluate_model(
             model_key=run.name,
             model_dataset=run.config.get("dataset", ""),
@@ -561,6 +636,8 @@ def main():
             gt_by_image=gt_by_image,
             matching_threshold=JUNCTION_MATCHING_THRESHOLD,
             out_dir=out_dir,
+            is_test=args.is_test,
+            plot_dir=_PLOT_DIR / safe_name if _PLOT_DIR else None,
         )
         new_metrics_rows.append(row)
 
@@ -570,7 +647,7 @@ def main():
     # nnUNet models
     nnunet_to_eval = [
         (dataset, trainer)
-        for dataset, trainer in NNUNET_JUNCTION_MODELS
+        for dataset, trainer in NNUNET_EVALUATIONS
         if nnunet_model_key(dataset, trainer) not in computed_models
     ]
 
@@ -603,7 +680,7 @@ def main():
             )
 
             infer_fn = _make_nnunet_infer_fn(predictor)
-
+            safe_name = model_key.replace("/", "_")
             row = _evaluate_model(
                 model_key=model_key,
                 model_dataset=dataset,
@@ -612,6 +689,8 @@ def main():
                 gt_by_image=gt_by_image,
                 matching_threshold=JUNCTION_MATCHING_THRESHOLD,
                 out_dir=out_dir,
+                is_test=args.is_test,
+                plot_dir=_PLOT_DIR / safe_name if _PLOT_DIR else None,
             )
             new_metrics_rows.append(row)
 

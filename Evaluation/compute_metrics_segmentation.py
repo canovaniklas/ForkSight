@@ -19,6 +19,7 @@ Usage: python compute_metrics.py [--device CUDA_IDX] [--force-recompute]
 """
 
 import argparse
+import json
 import os
 import random
 from datetime import datetime
@@ -40,6 +41,7 @@ from Segmentation.SAM.sam_lora_util import (
 from Evaluation.evaluation_util import (
     collect_patch_metrics_and_betti,
     collect_patch_metrics_and_betti_from_masks,
+    finish_seg_overlay_plots,
     load_latest_metrics_csv,
     load_latest_persistence_raw_b0_csv,
     load_latest_persistence_raw_b1_csv,
@@ -54,14 +56,14 @@ from Evaluation.compute_metrics_config import (
 )
 
 
-def _collect_combined(model, test_img_dir, test_mask_dir, downsample_size, device, batch_size, run_name, save_pd_dir=None, is_test=False):
+def _collect_combined(model, test_img_dir, test_mask_dir, downsample_size, device, batch_size, run_name, save_pd_dir=None, is_test=False, plot_dir=None):
     """Run patch-level inference once per batch, returning segmentation metrics
     and per-patch persistence diagram rows.
     """
     dataset = SegmentationDataset(
         test_img_dir, test_mask_dir, downsample_size=downsample_size, return_img_name=True)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-    return collect_patch_metrics_and_betti(model, loader, device, run_name, save_pd_dir=save_pd_dir, is_test=is_test)
+    return collect_patch_metrics_and_betti(model, loader, device, run_name, save_pd_dir=save_pd_dir, is_test=is_test, plot_dir=plot_dir)
 
 
 def main():
@@ -81,6 +83,8 @@ def main():
                         help="Skip nnUNet evaluation")
     parser.add_argument("--test", type=bool, default=False,
                         help="Run in test mode with limited data")
+    parser.add_argument("--plot", action="store_true",
+                        help="Save segmentation overlay plots (pred=cyan, FN=magenta) per model")
     args = parser.parse_args()
 
     env_utils.load_forksight_env()
@@ -105,6 +109,11 @@ def main():
     NNUNET_TEST_MASK_DIR = os.getenv("NNUNET_TEST_MASK_DIR", "labelsTs")
     NNUNET_PRED_DIR = os.getenv(
         "NNUNET_PRED_DIR", "best_configuration_inference_output")
+    NNUNET_DATASET_ID = env_utils.load_as("NNUNET_DATASET_ID", int, 1)
+    NNUNET_DATASET_NAME = os.getenv("NNUNET_DATASET_NAME", "Segmentation_v1")
+
+    _NNUNET_CASE_MAPPING_PATH = Path(
+        NNUNET_RAW_DIR) / f"Dataset{NNUNET_DATASET_ID:03d}_{NNUNET_DATASET_NAME}" / "case_mapping.json"
 
     if DATASETS_DIR is None:
         raise ValueError("DATASETS_DIR environment variable must be set.")
@@ -129,6 +138,24 @@ def main():
     _EVAL_DIR = Path(EVALUATION_OUTPUT_DIR) / "segmentation" / timestamp
     _CSV_DIR = _EVAL_DIR / "csv"
     _CSV_DIR.mkdir(parents=True, exist_ok=True)
+    _PLOT_DIR = _EVAL_DIR / "plots" if args.plot else None
+
+    if not args.dataset:
+        raise ValueError(
+            "Dataset name must be provided via --dataset argument.")
+    test_img_dir = (Path(DATASETS_DIR) / args.dataset /
+                    "test" / HIGHRES_IMG_PATCHES_DIR_NAME)
+    test_mask_dir = (Path(DATASETS_DIR) / args.dataset /
+                     "test" / HIGHRES_MASK_PATCHES_DIR_NAME)
+
+    nnunet_case_mapping = None
+    if _NNUNET_CASE_MAPPING_PATH:
+        with open(_NNUNET_CASE_MAPPING_PATH) as f:
+            mapping_list = json.load(f)
+        nnunet_case_mapping = {
+            entry["nnunet_case"]: (entry["original_filename"], entry["patch"])
+            for entry in mapping_list
+        }
 
     df_prev_metrics = load_latest_metrics_csv(
         _CSV_DIR) if not args.force_recompute else pd.DataFrame()
@@ -237,23 +264,23 @@ def main():
                 downsample_size = None
             print(f"  Downsample size: {downsample_size}")
 
-            dataset_name = args.dataset if args.dataset else run.config.get(
-                "dataset", "")
-            test_img_dir = (Path(DATASETS_DIR) / dataset_name /
-                            "test" / HIGHRES_IMG_PATCHES_DIR_NAME)
-            test_mask_dir = (Path(DATASETS_DIR) / dataset_name /
-                             "test" / HIGHRES_MASK_PATCHES_DIR_NAME)
-
             print(
                 f"\n  Computing patch-level metrics and persistence diagrams "
                 f"(dataset={dataset_name}, batch_size={args.batch_size})")
 
+            safe_name = run.name.replace("/", "_")
+            model_plot_dir = _PLOT_DIR / safe_name if _PLOT_DIR else None
             raw_metrics, pp_metrics, \
                 raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows, \
                 pd_distance_rows, pd_distances = \
                 _collect_combined(model, test_img_dir, test_mask_dir,
                                   downsample_size, device, args.batch_size, run.name,
-                                  save_pd_dir=_EVAL_DIR / f"persistence_{run.name}", is_test=args.test)
+                                  save_pd_dir=_EVAL_DIR /
+                                  f"persistence_{run.name}",
+                                  is_test=args.test, plot_dir=model_plot_dir)
+
+            if model_plot_dir is not None:
+                finish_seg_overlay_plots(model_plot_dir)
 
             _record_results(
                 run.name, run.config.get("dataset", ""),
@@ -269,7 +296,8 @@ def main():
     if not args.no_nnunet and NNUNET_EVALUATIONS:
         for dataset_name, trainer_class in NNUNET_EVALUATIONS:
             pred_dir = Path(NNUNET_RESULTS_DIR) / \
-                dataset_name / trainer_class / NNUNET_PRED_DIR
+                dataset_name / \
+                f"{trainer_class}__nnUNetPlans__2d" / NNUNET_PRED_DIR
             if not pred_dir:
                 print(
                     f"\n[WARN] No predictions directory '{str(pred_dir)}' found, skipping.")
@@ -293,6 +321,8 @@ def main():
             print(f"  Predictions: {pred_dir}")
             print(f"{'='*60}")
 
+            safe_name = model_key.replace("/", "_")
+            model_plot_dir = _PLOT_DIR / safe_name if _PLOT_DIR else None
             raw_metrics, pp_metrics, \
                 raw_b0_rows, raw_b1_rows, sdt_b0_rows, sdt_b1_rows, \
                 pd_distance_rows, pd_distances = \
@@ -300,8 +330,14 @@ def main():
                     gt_mask_dir, pred_dir, model_key,
                     save_pd_dir=_EVAL_DIR /
                     f"persistence_{dataset_name}_{trainer_class}",
-                    is_test=args.test
+                    is_test=args.test,
+                    plot_dir=model_plot_dir,
+                    plot_case_mapping=nnunet_case_mapping,
+                    original_img_patches_dir=test_img_dir,
                 )
+
+            if model_plot_dir is not None:
+                finish_seg_overlay_plots(model_plot_dir)
 
             _record_results(
                 model_key, dataset_name,

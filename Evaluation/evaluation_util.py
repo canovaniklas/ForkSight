@@ -14,6 +14,7 @@ from scipy.ndimage import distance_transform_edt
 from skimage.morphology import skeletonize
 
 from Segmentation.PostProcessing.segmentation_postprocessing import remove_small_objects_from_batch
+from Segmentation.PreProcessing.General.preprocessing_util import get_base_images
 
 
 # CSV filename patterns
@@ -32,6 +33,96 @@ PERSISTENCE_DIST_PATTERN = re.compile(
 
 PERSISTENCE_THRESHOLD_RAW = 0.01
 PERSISTENCE_THRESHOLD_SDT = 2.0
+
+# Patch-grouping for stitched segmentation overlay plots
+_PLOT_PATCH_RE = re.compile(r'^(.+)_patch_(\d+)$')
+_STITCH_GRID = (4, 4)
+_N_STITCH_PATCHES = _STITCH_GRID[0] * _STITCH_GRID[1]
+
+
+def _render_seg_overlay(
+    img: torch.Tensor | None,
+    pred_mask: torch.Tensor,
+    gt_mask: torch.Tensor,
+    alpha: float = 0.6,
+) -> np.ndarray:
+    """Composite prediction (cyan) and false-negative pixels (magenta) over the image.
+
+    Parameters
+    ----------
+    img       : (3, H, W) float tensor in [0, 1], or None for a black background.
+    pred_mask : (1, H, W) binary prediction tensor.
+    gt_mask   : (1, H, W) binary ground-truth tensor.
+
+    Returns
+    -------
+    (H, W, 3) uint8 array suitable for PIL / plt.imsave.
+    """
+    h, w = pred_mask.shape[-2:]
+    base = img.permute(1, 2, 0).cpu().numpy() if img is not None \
+        else np.zeros((h, w, 3), dtype=np.float32)
+    result = base.astype(np.float32).copy()
+
+    pred_np = pred_mask.squeeze(0).cpu().float().numpy()
+    fn_np = ((gt_mask == 1) & (pred_mask == 0)
+             ).squeeze(0).cpu().float().numpy()
+
+    cyan = np.array([0.0, 1.0, 1.0], dtype=np.float32)
+    magenta = np.array([1.0, 0.0, 0.5], dtype=np.float32)
+
+    m_pred = pred_np > 0
+    result[m_pred] = result[m_pred] * (1 - alpha) + cyan * alpha
+    m_fn = fn_np > 0
+    result[m_fn] = result[m_fn] * (1 - alpha) + magenta * alpha
+
+    return (result.clip(0, 1) * 255).astype(np.uint8)
+
+
+def finish_seg_overlay_plots(plot_dir: Path) -> None:
+    """Stitch per-patch overlay PNGs into full-image plots and clean up.
+
+    For full images: finds base image names via ``get_base_images``, collects
+    the 16 matching ``{base}_patch_{idx:02d}.png`` files, tiles them into a
+    4×4 canvas and deletes the individual patch files.  Incomplete groups
+    (e.g. from ``--test`` mode) are left as individual files.
+    For SoI images (single-patch): renames ``{base}_patch_00.png`` to 
+    ``{base}.png``.
+    """
+
+    rows, cols = _STITCH_GRID
+
+    # Full images
+    for base_name in get_base_images(plot_dir, exclude_soi_images=True):
+        patch_paths = sorted(
+            p for p in plot_dir.glob("*.png")
+            if p.name.startswith(f"{base_name}_patch")
+        )
+        if not patch_paths or len(patch_paths) != _N_STITCH_PATCHES:
+            continue
+        indexed = []
+        for p in patch_paths:
+            m = _PLOT_PATCH_RE.match(p.stem)
+            indexed.append((int(m.group(2)), p))
+        indexed.sort(key=lambda t: t[0])
+        h, w = np.array(Image.open(indexed[0][1])).shape[:2]
+        canvas = np.zeros((rows * h, cols * w, 3), dtype=np.uint8)
+        for idx, p in indexed:
+            arr = np.array(Image.open(p))
+            r, c = divmod(idx, cols)
+            canvas[r * h:(r + 1) * h, c * w:(c + 1) * w] = arr[:, :, :3]
+        Image.fromarray(canvas).save(plot_dir / f"{base_name}.png")
+        for _, p in indexed:
+            p.unlink()
+
+    # SoI images: rename {base_name}_patch_00.png → {base_name}.png
+    all_names = get_base_images(plot_dir, exclude_soi_images=False)
+    for base_name in (n for n in all_names if "_soi_" in n):
+        patch_paths = sorted(
+            p for p in plot_dir.glob("*.png")
+            if p.name.startswith(f"{base_name}_patch")
+        )
+        if len(patch_paths) == 1:
+            patch_paths[0].rename(plot_dir / f"{base_name}.png")
 
 
 def format_score(x) -> str:
@@ -471,6 +562,7 @@ def collect_patch_metrics_and_betti(
     run_name: str,
     save_pd_dir: Path | None = None,
     is_test: bool = False,
+    plot_dir: Path | None = None,
 ) -> tuple:
     """Run batched patch-level inference once, computing both segmentation
     metrics and per-patch persistence diagram data
@@ -507,6 +599,9 @@ def collect_patch_metrics_and_betti(
     run_dir = _setup_run_dir(save_pd_dir)
     accum = _make_accumulators()
 
+    if plot_dir is not None:
+        plot_dir.mkdir(parents=True, exist_ok=True)
+
     for images, gt_masks, _, patch_names in loader:
         batch_size = images.shape[0]
         input_list = get_batched_input_list(images.to(device))
@@ -532,6 +627,10 @@ def collect_patch_metrics_and_betti(
                 output_masks[i], gt_masks[i], pp_masks[i], prob_maps[i],
                 run_name, accum, run_dir,
             )
+            if plot_dir is not None:
+                arr = _render_seg_overlay(
+                    images[i], output_masks[i], gt_masks[i])
+                Image.fromarray(arr).save(plot_dir / f"{patch_names[i]}.png")
 
         # only run one batch in test mode
         if is_test:
@@ -735,6 +834,9 @@ def collect_patch_metrics_and_betti_from_masks(
     run_name: str,
     save_pd_dir: Path | None = None,
     is_test: bool = False,
+    plot_dir: Path | None = None,
+    plot_case_mapping: dict | None = None,
+    original_img_patches_dir: Path | None = None,
 ) -> tuple:
     """Compute patch-level segmentation metrics and persistence diagrams by
     loading pre-computed binary prediction masks from a directory.
@@ -769,6 +871,9 @@ def collect_patch_metrics_and_betti_from_masks(
     run_dir = _setup_run_dir(save_pd_dir)
     accum = _make_accumulators()
 
+    if plot_dir is not None:
+        plot_dir.mkdir(parents=True, exist_ok=True)
+
     gt_index = {p.stem: p for p in gt_mask_dir.iterdir() if p.is_file()
                 and p.suffix == ".png"}
     pred_files = sorted(
@@ -784,9 +889,10 @@ def collect_patch_metrics_and_betti_from_masks(
                 f"  [WARN] No ground-truth found for prediction '{case}', skipping.")
             continue
 
-        pred = _load_binary_mask_tensor(pred_path)                              # (1, H, W)
-        gt = _load_binary_mask_tensor(gt_path)                                  # (1, H, W)
-        pp_pred = remove_small_objects_from_batch(pred.unsqueeze(0)).squeeze(0) # (1, H, W)
+        pred = _load_binary_mask_tensor(pred_path)  # (1, H, W)
+        gt = _load_binary_mask_tensor(gt_path)      # (1, H, W)
+        pp_pred = remove_small_objects_from_batch(
+            pred.unsqueeze(0)).squeeze(0)           # (1, H, W)
 
         npz_path = pred_path.parent / f"{case}.npz"
         npz_data = np.load(npz_path)
@@ -797,6 +903,19 @@ def collect_patch_metrics_and_betti_from_masks(
 
         _process_patch(case, pred, gt, pp_pred, prob_map,
                        run_name, accum, run_dir)
+
+        if plot_dir is not None:
+            img_tensor = None
+            out_name = case
+            if plot_case_mapping is not None and case in plot_case_mapping:
+                orig_filename, patch_idx = plot_case_mapping[case]
+                out_name = f"{orig_filename}_patch_{patch_idx:02d}"
+                if original_img_patches_dir is not None:
+                    img_path = original_img_patches_dir / f"{out_name}.png"
+                    if img_path.is_file():
+                        img_tensor = load_transform_image(img_path)
+            arr = _render_seg_overlay(img_tensor, pred, gt)
+            Image.fromarray(arr).save(plot_dir / f"{out_name}.png")
 
         # only run one patch in test mode
         if is_test:
