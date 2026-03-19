@@ -4,13 +4,11 @@ Run this once per model on the machine where training happened.
 Required arguments:
     --dataset
     --trainer
-    --wandb-project.
 
 Example usage:
 python upload_nnunet_to_wandb.py \
     --dataset Dataset001_Segmentation_v1 \
     --trainer nnUNetTrainerClDiceLoss \
-    --wandb-project ForkSight-nnUNet
 
 The resulting artifact contains:
     plans.json
@@ -110,8 +108,8 @@ def main():
         artifact.add_file(str(ckpt_path), name=artifact_name_in_dir)
 
     run.log_artifact(artifact)
-    print(f"\nUploaded artifact '{artifact_name}' with folds "
-          f"{folds} to {args.wandb_project}.")
+    print(
+        f"\nUploaded artifact '{artifact_name}' with folds {folds} to {WANDB_NNUNET_PROJECT}.")
     run.finish()
 
 
