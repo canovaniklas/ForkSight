@@ -349,7 +349,7 @@ def _save_junction_detection_plot(
                         if a["type"] == _JUNCTION_TYPE_4_WAY])
     if len(gt_3way) > 0:
         ax.plot(gt_3way[:, 0], gt_3way[:, 1], "x",
-                color="lime", markersize=8, markeredgewidth=1, label="GT 3-way")
+                color="red", markersize=8, markeredgewidth=1, label="GT 3-way")
     if len(gt_4way) > 0:
         ax.plot(gt_4way[:, 0], gt_4way[:, 1], "x",
                 color="orange", markersize=8, markeredgewidth=1, label="GT 4-way")

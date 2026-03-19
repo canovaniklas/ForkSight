@@ -69,7 +69,7 @@ def plot_images_masks_junctions(
 
     if junction_coords_3way is not None and len(junction_coords_3way) > 0:
         ax.plot(junction_coords_3way[:, 0], junction_coords_3way[:, 1], 'o',
-                color='lime', markersize=20, markerfacecolor='none', markeredgewidth=1, label='3-way')
+                color='red', markersize=20, markerfacecolor='none', markeredgewidth=1, label='3-way')
     if junction_coords_4way is not None and len(junction_coords_4way) > 0:
         ax.plot(junction_coords_4way[:, 0], junction_coords_4way[:, 1], 'o',
                 color='orange', markersize=20, markerfacecolor='none', markeredgewidth=1, label='4-way')
