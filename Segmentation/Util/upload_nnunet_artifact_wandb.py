@@ -80,6 +80,7 @@ def main():
         entity=WANDB_ENTITY,
         project=WANDB_NNUNET_PROJECT,
         job_type="upload-nnunet-model",
+        name=f"artifact_upload_{artifact_name}",
     )
 
     artifact = wandb.Artifact(
