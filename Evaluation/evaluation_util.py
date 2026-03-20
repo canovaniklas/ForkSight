@@ -339,19 +339,30 @@ def _add_figure_legend(fig: plt.Figure, is_sdt: bool = False) -> None:
 
 def _save_raw_persistence_plot(
     pred_b0: list, pred_b1: list,
+    gt_b0: list, gt_b1: list,
     patch_name: str,
     save_path: Path,
 ) -> None:
-    """RAW: 1×2 — prediction PD | prediction barcode.
+    """RAW: 2×2 — row 0: pred PD | pred barcode; row 1: GT PD | GT barcode.
 
-    Axes fixed at [-0.05, 1.05]. GT is not shown.
+    Axes fixed at [-0.05, 1.05] (probability-map domain).
     """
     lim = (-0.05, 1.05)
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-    fig.suptitle(patch_name)
-    _plot_pd_axis(axes[0], pred_b0, pred_b1, lim)
-    _plot_barcode_axis(axes[1], pred_b0, pred_b1, lim)
-    _add_figure_legend(fig)
+    fig = plt.figure(figsize=(12, 10))
+    fig.suptitle(patch_name, y=1.02)
+    subfigs = fig.subfigures(2, 1, hspace=0.02)
+
+    subfigs[0].suptitle("Prediction", fontweight="bold")
+    ax_pred = subfigs[0].subplots(1, 2)
+    _plot_pd_axis(ax_pred[0], pred_b0, pred_b1, lim)
+    _plot_barcode_axis(ax_pred[1], pred_b0, pred_b1, lim)
+
+    subfigs[1].suptitle("Ground Truth", fontweight="bold")
+    ax_gt = subfigs[1].subplots(1, 2)
+    _plot_pd_axis(ax_gt[0], gt_b0, gt_b1, lim)
+    _plot_barcode_axis(ax_gt[1], gt_b0, gt_b1, lim)
+
+    _add_figure_legend(fig, is_sdt=True)
     fig.savefig(save_path, bbox_inches="tight", dpi=150)
     plt.close(fig)
 
@@ -387,8 +398,8 @@ def _save_sdt_persistence_plot(
 
 
 def _save_persistence_diagrams(
-    raw_b0_pred: list,
-    raw_b1_pred: list,
+    raw_b0_pred: list, raw_b1_pred: list,
+    raw_b0_gt: list, raw_b1_gt: list,
     sdt_b0_pred: list, sdt_b0_gt: list,
     sdt_b1_pred: list, sdt_b1_gt: list,
     run_dir: Path,
@@ -396,11 +407,11 @@ def _save_persistence_diagrams(
 ) -> None:
     """Save two persistence-diagram figures into *run_dir*.
 
-    Files: ``{patch_name}_raw.png`` (1×2, probability map, fixed [0,1] limits),
-           ``{patch_name}_sdt.png`` (1×4, SDT map, dynamic limits).
+    Files: ``{patch_name}_raw.png`` (2×2, probability map, fixed [0,1] limits),
+           ``{patch_name}_sdt.png`` (2×2, SDT map, dynamic limits).
     """
     _save_raw_persistence_plot(
-        raw_b0_pred, raw_b1_pred,
+        raw_b0_pred, raw_b1_pred, raw_b0_gt, raw_b1_gt,
         patch_name, run_dir / f"{patch_name}_raw.png",
     )
     _save_sdt_persistence_plot(
@@ -518,6 +529,7 @@ def _process_patch(
     if run_dir is not None:
         _save_persistence_diagrams(
             pred_b0_pairs, pred_b1_pairs,
+            gt_b0_pairs, gt_b1_pairs,
             pred_sdt_b0, gt_sdt_b0,
             pred_sdt_b1, gt_sdt_b1,
             run_dir, patch_name,
