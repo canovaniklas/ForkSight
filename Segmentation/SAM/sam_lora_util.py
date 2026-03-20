@@ -28,7 +28,7 @@ EVALUATED_TAG = "test-evaluated"
 class SegmentationDataset(Dataset):
     def __init__(self, images_dir: Path, masks_dir: Path, heatmaps_dir: Path | None = None,
                  downsample_size: tuple[int, int] = None, return_img_name: bool = False):
-        self.image_paths = list(images_dir.glob("*.png"))
+        self.image_paths = sorted(images_dir.glob("*.png"))
         self.masks_dir = masks_dir
         self.heatmaps_dir = heatmaps_dir
         self.downsample_size = downsample_size

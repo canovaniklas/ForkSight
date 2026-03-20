@@ -81,8 +81,8 @@ def main():
                         help="Skip SAM model evaluation")
     parser.add_argument("--no-nnunet", action="store_true",
                         help="Skip nnUNet evaluation")
-    parser.add_argument("--test", type=bool, default=False,
-                        help="Run in test mode with limited data")
+    parser.add_argument("--is-test", action="store_true",
+                        help="Break after computing metrics for the first (full) image")
     parser.add_argument("--plot", action="store_true",
                         help="Save segmentation overlay plots (pred=cyan, FN=magenta) per model")
     args = parser.parse_args()
@@ -132,7 +132,7 @@ def main():
         f"cuda:{args.device}" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    print(f"\Test mode: {args.test}\n")
+    print(f"\nTest mode: {args.is_test}\n")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     _EVAL_DIR = Path(EVALUATION_OUTPUT_DIR) / "segmentation" / timestamp
@@ -216,7 +216,7 @@ def main():
             "Bottleneck B1 SDT": sdt_b1_bn,
         }
 
-    # SAM model evaluation                                                 #
+    # SAM model evaluation
     if not args.no_sam:
         api = wandb.Api()
         all_runs = list(api.runs(f"{WANDB_ENTITY}/{WANDB_SAM_PROJECT}"))
@@ -266,7 +266,7 @@ def main():
 
             print(
                 f"\n  Computing patch-level metrics and persistence diagrams "
-                f"(dataset={dataset_name}, batch_size={args.batch_size})")
+                f"(dataset={args.dataset}, batch_size={args.batch_size})")
 
             safe_name = run.name.replace("/", "_")
             model_plot_dir = _PLOT_DIR / safe_name if _PLOT_DIR else None
@@ -277,9 +277,13 @@ def main():
                                   downsample_size, device, args.batch_size, run.name,
                                   save_pd_dir=_EVAL_DIR /
                                   f"persistence_{run.name}",
-                                  is_test=args.test, plot_dir=model_plot_dir)
+                                  is_test=args.is_test, plot_dir=model_plot_dir)
+
+            print(f"  Finished computing metrics for {run.name}")
 
             if model_plot_dir is not None:
+                print(
+                    f"  Saving segmentation overlay plots to {model_plot_dir}")
                 finish_seg_overlay_plots(model_plot_dir)
 
             _record_results(
@@ -330,13 +334,17 @@ def main():
                     gt_mask_dir, pred_dir, model_key,
                     save_pd_dir=_EVAL_DIR /
                     f"persistence_{dataset_name}_{trainer_class}",
-                    is_test=args.test,
+                    is_test=args.is_test,
                     plot_dir=model_plot_dir,
                     plot_case_mapping=nnunet_case_mapping,
                     original_img_patches_dir=test_img_dir,
                 )
 
+            print(f"  Finished computing metrics for {model_key}")
+
             if model_plot_dir is not None:
+                print(
+                    f"  Saving segmentation overlay plots to {model_plot_dir}")
                 finish_seg_overlay_plots(model_plot_dir)
 
             _record_results(

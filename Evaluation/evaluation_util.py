@@ -602,6 +602,7 @@ def collect_patch_metrics_and_betti(
     if plot_dir is not None:
         plot_dir.mkdir(parents=True, exist_ok=True)
 
+    img_count = 0
     for images, gt_masks, _, patch_names in loader:
         batch_size = images.shape[0]
         input_list = get_batched_input_list(images.to(device))
@@ -632,8 +633,12 @@ def collect_patch_metrics_and_betti(
                     images[i], output_masks[i], gt_masks[i])
                 Image.fromarray(arr).save(plot_dir / f"{patch_names[i]}.png")
 
-        # only run one batch in test mode
-        if is_test:
+            img_count += 1
+
+        print(f"Processed {img_count} patches of {len(loader.dataset)} total")
+
+        # in test mode, run 16 patches (one full image)
+        if is_test and img_count >= 16:
             break
 
     return _aggregate_results(accum)
@@ -881,7 +886,7 @@ def collect_patch_metrics_and_betti_from_masks(
         if p.is_file() and p.suffix == ".png"
     )
 
-    for pred_path in pred_files:
+    for idx, pred_path in enumerate(pred_files):
         case = pred_path.stem
         gt_path = gt_index.get(case)
         if gt_path is None:
@@ -917,8 +922,11 @@ def collect_patch_metrics_and_betti_from_masks(
             arr = _render_seg_overlay(img_tensor, pred, gt)
             Image.fromarray(arr).save(plot_dir / f"{out_name}.png")
 
-        # only run one patch in test mode
-        if is_test:
+        print(
+            f"Processed {idx + 1} (pre-predicted) patches of {len(pred_files)} total")
+
+        # in test mode, run 16 patches (one full image)
+        if is_test and idx >= 15:
             break
 
     return _aggregate_results(accum)
