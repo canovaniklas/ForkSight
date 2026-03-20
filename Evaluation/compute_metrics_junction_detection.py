@@ -211,6 +211,7 @@ def _compute_metrics(
     type_incorrect = tp_loc - type_correct
     type_accuracy = type_correct / tp_loc if tp_loc > 0 else 0.0
 
+    # 2×2 type-classification CM (only matched TPs)
     cm_3way_3way = sum(1 for r in matched_rows
                        if r["matched_gt_type"] == _JUNCTION_TYPE_3_WAY
                        and r["pred_type"] == _JUNCTION_TYPE_3_WAY)
@@ -223,6 +224,24 @@ def _compute_metrics(
     cm_4way_4way = sum(1 for r in matched_rows
                        if r["matched_gt_type"] == _JUNCTION_TYPE_4_WAY
                        and r["pred_type"] == _JUNCTION_TYPE_4_WAY)
+
+    # Per-type FN: GT junctions that were never localised (missed entirely)
+    fn_3way = sum(1 for a in all_fn_annotations
+                  if a["type"] == _JUNCTION_TYPE_3_WAY)
+    fn_4way = sum(1 for a in all_fn_annotations
+                  if a["type"] == _JUNCTION_TYPE_4_WAY)
+
+    # Per-type FP: predicted junctions with no matching GT, broken down by pred type
+    fp_rows = [r for r in all_pred_rows if r["is_fp"]]
+    fp_3way = sum(1 for r in fp_rows if r["pred_type"] == _JUNCTION_TYPE_3_WAY)
+    fp_4way = sum(1 for r in fp_rows if r["pred_type"] == _JUNCTION_TYPE_4_WAY)
+
+    # Detection recall per GT type: fraction of GT junctions of that type that were
+    # localised at all (regardless of whether the type was classified correctly)
+    gt_3way_total = cm_3way_3way + cm_3way_4way + fn_3way
+    gt_4way_total = cm_4way_3way + cm_4way_4way + fn_4way
+    detection_recall_3way = (cm_3way_3way + cm_3way_4way) / gt_3way_total if gt_3way_total > 0 else 0.0
+    detection_recall_4way = (cm_4way_3way + cm_4way_4way) / gt_4way_total if gt_4way_total > 0 else 0.0
 
     prec_3way, rec_3way, f1_3way = _prf(
         cm_3way_3way, cm_4way_3way, cm_3way_4way)
@@ -237,6 +256,14 @@ def _compute_metrics(
         "cm_gt3_pred4": cm_3way_4way,
         "cm_gt4_pred3": cm_4way_3way,
         "cm_gt4_pred4": cm_4way_4way,
+        "fn_3way": fn_3way,
+        "fn_4way": fn_4way,
+        "fp_3way": fp_3way,
+        "fp_4way": fp_4way,
+        "gt_3way_total": gt_3way_total,
+        "gt_4way_total": gt_4way_total,
+        "detection_recall_3way": detection_recall_3way,
+        "detection_recall_4way": detection_recall_4way,
         "type_precision_3way": prec_3way,
         "type_recall_3way": rec_3way,
         "type_f1_3way": f1_3way,
@@ -440,6 +467,143 @@ def _evaluate_model(
     return row
 
 
+def plot_confusion_matrix_per_model(df_metrics: pd.DataFrame, out_dir: Path) -> None:
+    """Save a 3×3 confusion-matrix figure for each model (pp results).
+
+    Rows = GT outcome  : 3-way junction | 4-way junction | no GT (FP)
+    Cols = pred outcome: predicted 3-way | predicted 4-way | not found (FN)
+
+    The top-left 2×2 block covers matched TPs with type breakdown.
+    The right column shows per-type FN (missed junctions).
+    The bottom row shows per-type FP (spurious detections).
+    The bottom-right cell is undefined and masked out.
+    """
+    cm_dir = out_dir / "confusion_matrices"
+    cm_dir.mkdir(exist_ok=True)
+
+    _NAN = float("nan")
+
+    for model_key, row in df_metrics.iterrows():
+        # Build 3×3 matrix; [2,2] is N/A
+        cm = np.array(
+            [
+                [row["pp_cm_gt3_pred3"], row["pp_cm_gt3_pred4"], row["pp_fn_3way"]],
+                [row["pp_cm_gt4_pred3"], row["pp_cm_gt4_pred4"], row["pp_fn_4way"]],
+                [row["pp_fp_3way"],      row["pp_fp_4way"],      _NAN],
+            ],
+            dtype=float,
+        )
+
+        # For colouring use only the defined cells
+        valid = cm[:2, :]  # bottom-right is N/A, exclude from colour scale
+        vmax = np.nanmax(valid) if np.nanmax(valid) > 0 else 1
+
+        fig, ax = plt.subplots(figsize=(6, 5))
+
+        # Draw defined cells manually so we can mask [2,2]
+        masked = np.ma.masked_invalid(cm)
+        im = ax.imshow(masked, cmap="Blues", vmin=0, vmax=vmax, aspect="auto")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+        # Shade the N/A cell in grey
+        ax.add_patch(plt.Rectangle((1.5, 1.5), 1, 1, color="#cccccc", zorder=2))
+        ax.text(2, 2, "N/A", ha="center", va="center",
+                fontsize=10, color="#666666", zorder=3)
+
+        col_labels = ["Pred 3-way", "Pred 4-way", "Not found\n(FN)"]
+        row_labels = ["GT 3-way", "GT 4-way", "No GT\n(FP)"]
+        ax.set_xticks([0, 1, 2])
+        ax.set_yticks([0, 1, 2])
+        ax.set_xticklabels(col_labels, fontsize=9)
+        ax.set_yticklabels(row_labels, fontsize=9)
+        ax.set_xlabel("Prediction", fontsize=10)
+        ax.set_ylabel("Ground truth", fontsize=10)
+
+        # Annotate each defined cell with count + row-normalised %
+        row_totals = [
+            row["pp_gt_3way_total"],
+            row["pp_gt_4way_total"],
+            row["pp_fp_3way"] + row["pp_fp_4way"],  # total FP (no GT row)
+        ]
+        for r in range(3):
+            for c in range(3):
+                if r == 2 and c == 2:
+                    continue
+                val = cm[r, c]
+                if np.isnan(val):
+                    continue
+                denom = row_totals[r]
+                pct_str = f"\n({100 * val / denom:.0f}%)" if denom > 0 else ""
+                text_color = "white" if val > vmax * 0.6 else "black"
+                ax.text(c, r, f"{int(val)}{pct_str}",
+                        ha="center", va="center",
+                        fontsize=10, color=text_color, fontweight="bold", zorder=4)
+
+        # Draw dividing lines to separate the FP/FN margins from the main block
+        ax.axhline(1.5, color="black", linewidth=1.5, linestyle="--")
+        ax.axvline(1.5, color="black", linewidth=1.5, linestyle="--")
+
+        det_rec_3 = row["pp_detection_recall_3way"]
+        det_rec_4 = row["pp_detection_recall_4way"]
+        type_acc = row["pp_type_accuracy"]
+        ax.set_title(
+            f"{model_key}\n"
+            f"Detection recall — 3-way: {det_rec_3:.2f}  4-way: {det_rec_4:.2f}"
+            f"  |  type acc (TP only): {type_acc:.2f}",
+            fontsize=9,
+        )
+
+        fig.tight_layout()
+        safe = model_key.replace("/", "_")
+        out = cm_dir / f"cm_{safe}.png"
+        fig.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    print(f"Saved {len(df_metrics)} confusion-matrix plot(s) to {cm_dir}")
+
+
+def plot_cross_model_comparison(df_metrics: pd.DataFrame, out_dir: Path) -> None:
+    """Grouped bar chart comparing key metrics across all models (pp results)."""
+    metrics_to_plot = {
+        "Precision\n(loc)": "pp_precision_loc",
+        "Recall\n(loc)": "pp_recall_loc",
+        "F1\n(loc)": "pp_f1_loc",
+        "Det. recall\n3-way": "pp_detection_recall_3way",
+        "Det. recall\n4-way": "pp_detection_recall_4way",
+        "Type acc\n(TP only)": "pp_type_accuracy",
+        "F1 3-way\n(type)": "pp_type_f1_3way",
+        "F1 4-way\n(type)": "pp_type_f1_4way",
+    }
+
+    n_metrics = len(metrics_to_plot)
+    n_models = len(df_metrics)
+    x = np.arange(n_metrics)
+    width = 0.8 / max(n_models, 1)
+    colors = plt.cm.tab10(np.linspace(0, 0.9, n_models))
+
+    fig, ax = plt.subplots(figsize=(max(10, n_metrics * 2), 5))
+
+    for i, (model_key, row) in enumerate(df_metrics.iterrows()):
+        vals = [float(row.get(col, 0.0)) for col in metrics_to_plot.values()]
+        offset = (i - n_models / 2 + 0.5) * width
+        bars = ax.bar(x + offset, vals, width=width * 0.9,
+                      label=model_key, color=colors[i])
+        ax.bar_label(bars, fmt="%.2f", fontsize=6, padding=2)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(list(metrics_to_plot.keys()))
+    ax.set_ylim(0, 1.18)
+    ax.set_ylabel("Score")
+    ax.set_title("Junction detection metrics by model (post-processed)")
+    ax.legend(loc="upper right", fontsize=8, framealpha=0.7)
+    ax.grid(axis="y", linestyle="--", alpha=0.4)
+    fig.tight_layout()
+    out = out_dir / "model_comparison.png"
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved model comparison plot to {out}")
+
+
 def _load_previous_metrics(base_dir: Path) -> pd.DataFrame:
     """Return the most recent metrics.csv across all timestamped sub-dirs, or
     an empty DataFrame if none exists."""
@@ -563,6 +727,9 @@ def main():
     metrics_path = out_dir / "metrics.csv"
     df_new.to_csv(metrics_path)
     print(f"\nSaved metrics as {metrics_path}")
+
+    plot_confusion_matrix_per_model(df_new, out_dir)
+    plot_cross_model_comparison(df_new, out_dir)
 
 
 if __name__ == "__main__":

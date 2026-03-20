@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import re
+from collections import defaultdict
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -120,6 +121,39 @@ def move_excluded(df: pd.DataFrame, junction_detection_dir: Path):
         print("No unannotated images found.")
 
 
+def resize_images_to_target(
+    df: pd.DataFrame, junction_detection_dir: Path, target_size: int = 4096
+) -> tuple[pd.DataFrame, list[dict]]:
+    """Resize images that are not target_size×target_size in-place; scale coordinates in df."""
+    image_dir = junction_detection_dir / "images"
+    did_resize = False
+
+    for img_path in sorted(image_dir.iterdir()):
+        pil_img = Image.open(img_path)
+        w, h = pil_img.size
+        if w == target_size and h == target_size:
+            continue
+
+        pil_img_resized = pil_img.resize(
+            (target_size, target_size), Image.BICUBIC)
+        pil_img_resized.save(img_path)
+
+        scale_x = target_size / w
+        scale_y = target_size / h
+        mask = df["image"] == img_path.stem
+        df.loc[mask, "x"] = df.loc[mask, "x"] * scale_x
+        df.loc[mask, "y"] = df.loc[mask, "y"] * scale_y
+
+        did_resize = True
+        print(
+            f"Resized {img_path.stem}: {w}x{h} to {target_size}x{target_size}")
+
+    if not did_resize:
+        print("All images already at target size; no resizing needed.")
+
+    return df, did_resize
+
+
 def plot_junctions(df: pd.DataFrame, junction_detection_dir: Path):
     """For each image in images/, save a plot with annotated junction points."""
     image_dir = junction_detection_dir / "images"
@@ -185,7 +219,8 @@ def plot_label_stats(df: pd.DataFrame, junction_detection_dir: Path):
     label_counts = df.groupby("image")["label"].nunique()
     n_mixed_labels = (label_counts > 1).sum()
 
-    labels = list(per_label.index) + ["Multiple annotations", "Mixed label types"]
+    labels = list(per_label.index) + \
+        ["Multiple annotations", "Mixed label types"]
     counts = list(per_label.values) + [n_multi_annot, n_mixed_labels]
     colors = ["steelblue"] * len(per_label) + ["orange", "tomato"]
 
@@ -245,6 +280,13 @@ def main():
         merged = pd.concat([df_json, df_csv], ignore_index=True)
         merged.to_csv(output_path, index=False)
         print(f"Wrote {len(merged)} rows to {output_path}")
+
+    # Resize non-4096 images and update coordinates before any plotting or exclusion
+    merged, did_resize = resize_images_to_target(
+        merged, junction_detection_dir)
+    if did_resize:
+        merged.to_csv(output_path, index=False)
+        print(f"Updated {output_path} with rescaled coordinates")
 
     if args.move_excluded:
         move_excluded(merged, junction_detection_dir)
