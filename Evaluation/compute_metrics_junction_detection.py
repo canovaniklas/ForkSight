@@ -418,7 +418,7 @@ def _evaluate_model(
     if plot_dir is not None:
         plot_dir.mkdir(parents=True, exist_ok=True)
 
-    for img_path in test_image_paths:
+    for idx, img_path in enumerate(test_image_paths):
         stem = img_path.stem
         gt_annotations = gt_by_image.get(stem, None)
         if gt_annotations is None:
@@ -449,6 +449,9 @@ def _evaluate_model(
                 plot_dir / f"{stem}.png",
                 title=f"{model_key} — {stem}",
             )
+
+        print(
+            f"  Processed {idx + 1}/{len(test_image_paths)} ({img_path.name})")
 
         if is_test:
             break
