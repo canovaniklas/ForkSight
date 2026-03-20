@@ -3,6 +3,8 @@ import numpy as np
 from skimage.morphology import skeletonize
 from skan.csr import skeleton_to_csgraph, summarize, Skeleton
 import networkx as nx
+from scipy.spatial import KDTree
+from scipy.sparse.csgraph import connected_components
 
 
 # minimum length of significan branch for a junction
@@ -12,9 +14,11 @@ MAX_JUNCTION_CONNECTOR_LENGTH = 20
 # terminal branches shorter than this are pruned (if a junction has multiple terminal branches, the longest is preserved to avoid over-pruning)
 MIN_TERMINAL_BRANCH_LENGTH = 40
 # junctions on cycles with total length below this are excluded, junctions on larger cycles may be valid
-MIN_CYCLE_LENGTH = 1000
+MIN_CYCLE_LENGTH = 4000
 # 4-way junctions within this distance of a VALID 3-way junction (replication fork) are suppressed
 MAX_3WAY_PRIORITY_DISTANCE = 30
+# junctions of any type within this pixel distance of each other are merged into one
+JUNCTION_MERGE_DISTANCE = 30
 
 
 def skeletonize_mask(segmentation_mask: torch.Tensor) -> np.ndarray:
@@ -256,6 +260,34 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
     return coords_3way, coords_4way
 
 
+def merge_nearby_junctions(coords_3way: np.ndarray, coords_4way: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    if len(coords_3way) == 0 and len(coords_4way) == 0:
+        return coords_3way, coords_4way
+
+    all_coords = np.concatenate([coords_3way, coords_4way], axis=0)
+    all_types = np.array([3] * len(coords_3way) + [4] * len(coords_4way))
+
+    # build adjacency from all pairs within merge distance
+    tree = KDTree(all_coords)
+    adj = tree.sparse_distance_matrix(
+        tree, max_distance=JUNCTION_MERGE_DISTANCE, output_type='coo_matrix')
+    n_components, labels = connected_components(adj, directed=False)
+
+    merged_3way, merged_4way = [], []
+    for label in range(n_components):
+        mask = labels == label
+        centroid = all_coords[mask].mean(axis=0)
+        if np.sum(all_types[mask] == 4) > np.sum(all_types[mask] == 3):
+            merged_4way.append(centroid)
+        else:
+            merged_3way.append(centroid)
+
+    return (
+        np.array(merged_3way) if merged_3way else np.empty((0, 2)),
+        np.array(merged_4way) if merged_4way else np.empty((0, 2)),
+    )
+
+
 def detect_junctions_in_segmentation_mask(
         segmentation_mask: torch.Tensor, verbose=False
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -271,6 +303,8 @@ def detect_junctions_in_segmentation_mask(
     junction_indices = np.where(degrees > 2)[0]
     coords_3way, coords_4way = filter_junctions_by_length(
         skeleton, junction_indices, degrees, verbose=verbose)
+
+    coords_3way, coords_4way = merge_nearby_junctions(coords_3way, coords_4way)
 
     # Convert (y, x) to (x, y) to match image coordinate system
     return coords_3way[:, ::-1], coords_4way[:, ::-1], skeleton
