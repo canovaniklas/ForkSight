@@ -124,6 +124,14 @@ def _match_predictions_to_gt(
     if n_pred == 0:
         return [], list(gt_annotations)
 
+    if n_gt == 0:
+        pred_rows = [{"x": float(x), "y": float(y), "pred_type": t,
+                      "matched_gt_x": None, "matched_gt_y": None,
+                      "matched_gt_type": None, "distance": None,
+                      "is_tp": False, "is_fp": True}
+                     for (x, y), t in zip(pred_coords, pred_types)]
+        return pred_rows, []
+
     gt_coords = np.array([[a["x"], a["y"]] for a in gt_annotations])
 
     # Compute all pairwise distances between predictions and GT junctions
@@ -240,8 +248,10 @@ def _compute_metrics(
     # localised at all (regardless of whether the type was classified correctly)
     gt_3way_total = cm_3way_3way + cm_3way_4way + fn_3way
     gt_4way_total = cm_4way_3way + cm_4way_4way + fn_4way
-    detection_recall_3way = (cm_3way_3way + cm_3way_4way) / gt_3way_total if gt_3way_total > 0 else 0.0
-    detection_recall_4way = (cm_4way_3way + cm_4way_4way) / gt_4way_total if gt_4way_total > 0 else 0.0
+    detection_recall_3way = (cm_3way_3way + cm_3way_4way) / \
+        gt_3way_total if gt_3way_total > 0 else 0.0
+    detection_recall_4way = (cm_4way_3way + cm_4way_4way) / \
+        gt_4way_total if gt_4way_total > 0 else 0.0
 
     prec_3way, rec_3way, f1_3way = _prf(
         cm_3way_3way, cm_4way_3way, cm_3way_4way)
@@ -489,7 +499,7 @@ def plot_confusion_matrix_per_model(df_metrics: pd.DataFrame, out_dir: Path) -> 
             [
                 [row["pp_cm_gt3_pred3"], row["pp_cm_gt3_pred4"], row["pp_fn_3way"]],
                 [row["pp_cm_gt4_pred3"], row["pp_cm_gt4_pred4"], row["pp_fn_4way"]],
-                [row["pp_fp_3way"],      row["pp_fp_4way"],      _NAN],
+                [row["pp_fp_3way"], row["pp_fp_4way"], _NAN],
             ],
             dtype=float,
         )
@@ -506,7 +516,8 @@ def plot_confusion_matrix_per_model(df_metrics: pd.DataFrame, out_dir: Path) -> 
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
         # Shade the N/A cell in grey
-        ax.add_patch(plt.Rectangle((1.5, 1.5), 1, 1, color="#cccccc", zorder=2))
+        ax.add_patch(plt.Rectangle(
+            (1.5, 1.5), 1, 1, color="#cccccc", zorder=2))
         ax.text(2, 2, "N/A", ha="center", va="center",
                 fontsize=10, color="#666666", zorder=3)
 
