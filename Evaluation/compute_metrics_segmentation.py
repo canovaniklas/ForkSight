@@ -136,9 +136,12 @@ def main():
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     _EVAL_DIR = Path(EVALUATION_OUTPUT_DIR) / "segmentation" / timestamp
+    _EVAL_DIR.mkdir(parents=True, exist_ok=False)
     _CSV_DIR = _EVAL_DIR / "csv"
     _CSV_DIR.mkdir(parents=True, exist_ok=True)
     _PLOT_DIR = _EVAL_DIR / "plots" if args.plot else None
+    if _PLOT_DIR:
+        _PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
     if not args.dataset:
         raise ValueError(

@@ -887,6 +887,8 @@ def collect_patch_metrics_and_betti_from_masks(
     )
 
     for idx, pred_path in enumerate(pred_files):
+        print(
+            f"Processing patch {idx + 1}/{len(pred_files)}: {pred_path.name}", flush=True)
         case = pred_path.stem
         gt_path = gt_index.get(case)
         if gt_path is None:
@@ -923,7 +925,7 @@ def collect_patch_metrics_and_betti_from_masks(
             Image.fromarray(arr).save(plot_dir / f"{out_name}.png")
 
         print(
-            f"Processed {idx + 1} (pre-predicted) patches of {len(pred_files)} total")
+            f"Processed {idx + 1} (pre-predicted) patches of {len(pred_files)} total", flush=True)
 
         # in test mode, run 16 patches (one full image)
         if is_test and idx >= 15:
