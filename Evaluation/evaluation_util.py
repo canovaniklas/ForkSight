@@ -928,7 +928,7 @@ def collect_patch_metrics_and_betti_from_masks(
             out_name = case
             if plot_case_mapping is not None and case in plot_case_mapping:
                 orig_filename, patch_idx = plot_case_mapping[case]
-                out_name = f"{orig_filename}_patch_{patch_idx:02d}"
+                out_name = f"{orig_filename.replace('.png', '')}_patch_{patch_idx:02d}"
                 if original_img_patches_dir is not None:
                     img_path = original_img_patches_dir / f"{out_name}.png"
                     if img_path.is_file():
