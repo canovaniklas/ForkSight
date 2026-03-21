@@ -928,13 +928,17 @@ def collect_patch_metrics_and_betti_from_masks(
             out_name = case
             if plot_case_mapping is not None and case in plot_case_mapping:
                 orig_filename, patch_idx = plot_case_mapping[case]
-                out_name = f"{orig_filename.replace('.png', '')}_patch_{patch_idx:02d}"
+                orig_filename_stem = orig_filename.replace(".png", "")
+                if isinstance(patch_idx, int) and not orig_filename_stem.endswith("_soi"):
+                    out_name = f"{orig_filename_stem}_patch_{patch_idx:02d}.png"
+                elif isinstance(patch_idx, str) and patch_idx == "" and orig_filename_stem.endswith("_soi"):
+                    out_name = f"{orig_filename_stem}.png"
                 if original_img_patches_dir is not None:
-                    img_path = original_img_patches_dir / f"{out_name}.png"
+                    img_path = original_img_patches_dir / out_name
                     if img_path.is_file():
                         img_tensor = load_transform_image(img_path)
             arr = _render_seg_overlay(img_tensor, pred, gt)
-            Image.fromarray(arr).save(plot_dir / f"{out_name}.png")
+            Image.fromarray(arr).save(plot_dir / out_name)
 
         print(
             f"Processed {idx + 1} (pre-predicted) patches of {len(pred_files)} total", flush=True)
