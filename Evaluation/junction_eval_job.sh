@@ -41,7 +41,7 @@ case "$STAGE" in
         ;;
     metrics)
         source "$SAM_LORA_VENV/bin/activate"
-        srun python -u -m Evaluation.compute_metrics_junction_detection --plot
+        srun python -u -m Evaluation.compute_metrics_junction_detection --plot --plot-skeleton --force-recompute
         ;;
     *)
         echo "Error: unknown STAGE '${STAGE}'. Valid options: nnunet | sam | metrics"
