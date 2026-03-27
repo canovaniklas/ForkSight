@@ -17,6 +17,8 @@ MAX_JUNCTION_CONNECTOR_LENGTH = 30
 MIN_TERMINAL_BRANCH_LENGTH = 40
 # junctions on cycles with total length below this are excluded, junctions on larger cycles may be valid
 MIN_CYCLE_LENGTH = 4000
+# junctions within this pixel distance of any node on a (small) cycle are excluded
+JUNCTION_CYCLE_PROXIMITY_DISTANCE = 150
 # 4-way junctions within this distance of a VALID 3-way junction (replication fork) are suppressed
 MAX_3WAY_PRIORITY_DISTANCE = 500
 # junctions of any type within this pixel distance of each other are merged into one
@@ -123,6 +125,18 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
         if cycle_length < MIN_CYCLE_LENGTH:
             nodes_in_cycles.update(cycle)
 
+    # KDTree over cycle-node coordinates for fast proximity queries
+    _cycle_coords = np.array([skel_obj.coordinates[n]
+                             for n in nodes_in_cycles]) if nodes_in_cycles else None
+    _cycle_kdtree = KDTree(
+        _cycle_coords) if _cycle_coords is not None else None
+
+    def is_close_to_cycle(coord):
+        if _cycle_kdtree is None:
+            return False
+        dist, _ = _cycle_kdtree.query(coord)
+        return dist < JUNCTION_CYCLE_PROXIMITY_DISTANCE
+
     valid_coords_3way = []
     valid_coords_4way = []
     nodes_handled = set()
@@ -167,8 +181,9 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
             if n1 in nodes_handled or n2 in nodes_handled:
                 continue
 
-            # If the junction is part of a loop, it's an artifact
-            if n1 in nodes_in_cycles or n2 in nodes_in_cycles:
+            # If the junction is part of or close to a loop, it's an artifact
+            if n1 in nodes_in_cycles or n2 in nodes_in_cycles or \
+                    is_close_to_cycle(skel_obj.coordinates[n1]) or is_close_to_cycle(skel_obj.coordinates[n2]):
                 nodes_handled.update([n1, n2])
                 continue
 
@@ -191,7 +206,7 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
     # handle standard 3-way and 4-way junctions
     junction_results = []
     for j_idx in junction_indices:
-        if j_idx in nodes_handled or j_idx in nodes_in_cycles:
+        if j_idx in nodes_handled or j_idx in nodes_in_cycles or is_close_to_cycle(skel_obj.coordinates[j_idx]):
             continue
 
         node_branches = skel_stats[(skel_stats['node-id-src'] == j_idx) |
