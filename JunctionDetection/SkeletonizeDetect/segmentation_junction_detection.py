@@ -6,6 +6,8 @@ import networkx as nx
 from scipy.spatial import KDTree
 from scipy.sparse.csgraph import connected_components
 
+from Segmentation.PostProcessing.segmentation_postprocessing import remove_small_bbox_objects
+
 
 # minimum length of significan branch for a junction
 MIN_BRANCH_LENGTH = 100
@@ -16,7 +18,7 @@ MIN_TERMINAL_BRANCH_LENGTH = 40
 # junctions on cycles with total length below this are excluded, junctions on larger cycles may be valid
 MIN_CYCLE_LENGTH = 4000
 # 4-way junctions within this distance of a VALID 3-way junction (replication fork) are suppressed
-MAX_3WAY_PRIORITY_DISTANCE = 30
+MAX_3WAY_PRIORITY_DISTANCE = 500
 # junctions of any type within this pixel distance of each other are merged into one
 JUNCTION_MERGE_DISTANCE = 50
 
@@ -315,6 +317,7 @@ def detect_junctions_in_segmentation_mask(
     Returns (coords_3way, coords_4way, skeleton) where each coords array is
     (N, 2) in (x, y) image coordinates.
     '''
+    segmentation_mask = remove_small_bbox_objects(segmentation_mask)
     skeleton = skeletonize_mask(segmentation_mask)
     skeleton = prune_skeleton(skeleton)
 

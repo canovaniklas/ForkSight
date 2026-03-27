@@ -10,6 +10,9 @@ load_forksight_env()
 POSTPROCESSING_MIN_OBJ_SIZE = load_as("POSTPROCESSING_MIN_OBJ_SIZE", int, 100)
 POSTPROCESSING_CONNECT_DIAGONALLY = load_as_bool(
     "POSTPROCESSING_CONNECT_DIAGONALLY", True)
+# Components whose bounding box width AND height are both below this threshold are excluded from junction detection
+POSTPROCESSING_SMALL_BBOX_THRESHOLD = load_as(
+    "POSTPROCESSING_SMALL_BBOX_THRESHOLD", int, None)
 
 
 def get_connected_components(mask: torch.Tensor) -> tuple[np.ndarray, int]:
@@ -107,6 +110,35 @@ def extract_mask_elements_bboxes(mask: torch.Tensor) -> list[tuple[int, int, int
         boxes.append((x1, y1, x2, y2))
 
     return boxes
+
+
+def remove_small_bbox_objects(mask: torch.Tensor) -> torch.Tensor:
+    '''
+    Remove connected components whose bounding box width AND height are both
+    strictly below POSTPROCESSING_SMALL_BBOX_THRESHOLD.
+
+    :param mask: SINGLE segmentation mask, shape (1, H, W)
+    :return: mask of same shape with small-bbox components zeroed out
+    '''
+    assert mask.ndim == 3 and mask.shape[0] == 1, "Expected mask shape [1, H, W]"
+
+    if POSTPROCESSING_SMALL_BBOX_THRESHOLD is None:
+        return mask
+
+    labeled_mask, num_components = get_connected_components(mask)
+    cleaned = np.zeros_like(labeled_mask, dtype=np.uint8)
+
+    for component_idx in range(1, num_components + 1):
+        ys, xs = np.where(labeled_mask == component_idx)
+        w = int(xs.max()) - int(xs.min()) + 1
+        h = int(ys.max()) - int(ys.min()) + 1
+        if w < POSTPROCESSING_SMALL_BBOX_THRESHOLD and h < POSTPROCESSING_SMALL_BBOX_THRESHOLD:
+            continue
+        cleaned[ys, xs] = 1
+
+    result = torch.zeros_like(mask)
+    result[0] = torch.from_numpy(cleaned)
+    return result
 
 
 def postprocess_segmentation_masks(masks: torch.Tensor, grid_size: tuple[int, int],
