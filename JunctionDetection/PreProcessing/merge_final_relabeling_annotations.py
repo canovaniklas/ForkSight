@@ -11,7 +11,7 @@ import argparse
 import json
 import os
 import re
-from collections import defaultdict
+import shutil
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -21,6 +21,12 @@ import pandas as pd
 from PIL import Image
 
 import Environment.env_utils as env_utils
+
+# Directories to collect source PNG images from
+SOURCE_IMAGE_DIRS: list[str] = [
+    "Z:\\imcrdata\\2025_EM_Deep_Learning_Project\\FinalRelabelling\\Rescoring_Images_Agreed",
+    "Z:\\imcrdata\\2025_EM_Deep_Learning_Project\\FinalRelabelling\\Rescoring_Images_Disagreed"
+]
 
 
 def strip_float_suffix(label: str) -> str:
@@ -78,6 +84,42 @@ def load_agreed_csv(path: str) -> pd.DataFrame:
     return result
 
 
+def setup_images_dir(junction_detection_dir: Path):
+    """Delete and recreate images/, then populate it with PNGs from SOURCE_IMAGE_DIRS."""
+    image_dir = junction_detection_dir / "images"
+    if image_dir.exists():
+        shutil.rmtree(image_dir)
+    image_dir.mkdir(parents=True)
+
+    copied = 0
+    for src in SOURCE_IMAGE_DIRS:
+        src_path = Path(src)
+        for png in src_path.glob("*.png"):
+            shutil.copy2(png, image_dir / png.name)
+            copied += 1
+            print(f"Copied {png.name} to {image_dir}")
+    print(
+        f"Populated {image_dir} with {copied} PNG files from {len(SOURCE_IMAGE_DIRS)} source directories\n")
+
+
+def delete_excluded_images(junction_detection_dir: Path):
+    """Delete images whose stems appear in excluded_images.txt."""
+    excluded_txt = Path(__file__).parent / "excluded_images.txt"
+    if not excluded_txt.exists():
+        return
+    excluded_stems = {
+        line.strip() for line in excluded_txt.read_text().splitlines() if line.strip()}
+    image_dir = junction_detection_dir / "images"
+    deleted = 0
+    for img_path in list(image_dir.iterdir()):
+        if img_path.stem in excluded_stems:
+            img_path.unlink()
+            deleted += 1
+            print(f"Deleted excluded image {img_path.name} from {image_dir}")
+    if deleted:
+        print(f"Deleted {deleted} excluded images from {image_dir}\n")
+
+
 def normalize_image_filenames(junction_detection_dir: Path):
     """Remove '-000000_0-000' suffix from image filenames in images/ in-place."""
     image_dir = junction_detection_dir / "images"
@@ -89,7 +131,7 @@ def normalize_image_filenames(junction_detection_dir: Path):
             img_path.rename(img_path.parent / new_name)
             renamed += 1
     if renamed:
-        print(f"Renamed {renamed} image files (removed '{suffix}')")
+        print(f"Renamed {renamed} image files (removed '{suffix}')\n")
 
 
 def _get_image_points(df: pd.DataFrame, image_name: str):
@@ -180,8 +222,9 @@ def plot_junctions(df: pd.DataFrame, junction_detection_dir: Path):
 
         for _, row in points.iterrows():
             px, py = row["x"] * scale_x, row["y"] * scale_y
-            ax.plot(px, py, "o", color="none", markersize=40, markeredgewidth=3,
+            ax.plot(px, py, "o", color="none", markersize=40, markeredgewidth=1,
                     markeredgecolor="red")
+            ax.plot(px, py, "o", color="red", markersize=2)
 
         ax.set_title(img_path.stem, fontsize=8)
         ax.axis("off")
@@ -266,26 +309,27 @@ def main():
 
     junction_detection_dir = Path(RAW_DATA_DIR) / JUNCTION_DETECTION_DIR_NAME
 
+    setup_images_dir(junction_detection_dir)
     normalize_image_filenames(junction_detection_dir)
+    delete_excluded_images(junction_detection_dir)
 
     output_path = junction_detection_dir / JUNCTION_DETECTION_RELABELING_FILE_NAME
-    if output_path.exists() and not args.force_recompute:
-        print(
-            f"Loading existing CSV from {output_path} (use --force-recompute to regenerate)")
-        merged = pd.read_csv(output_path)
-    else:
-        df_json = load_final_json(args.json)
-        df_csv = load_agreed_csv(args.csv)
-        print(f"JSON points: {len(df_json)}, CSV points: {len(df_csv)}")
-        merged = pd.concat([df_json, df_csv], ignore_index=True)
+    if output_path.exists():
+        output_path.unlink()
+    df_json = load_final_json(args.json)
+    df_csv = load_agreed_csv(args.csv)
+    print(f"JSON points: {len(df_json)}, CSV points: {len(df_csv)}")
+    merged = pd.concat([df_json, df_csv], ignore_index=True)
 
-        # remove annotations for images that were manually excluded (in dir images_excluded_manually/)
-        images_manually_excluded = [p.stem for p in (
-            junction_detection_dir / "images_excluded_manually").glob("*.png")]
+    # remove annotations for images that were manually excluded
+    excluded_txt = Path(__file__).parent / "excluded_images.txt"
+    if excluded_txt.exists():
+        images_manually_excluded = {
+            line.strip() for line in excluded_txt.read_text().splitlines() if line.strip()}
         merged = merged[~merged["image"].isin(images_manually_excluded)]
 
-        merged.to_csv(output_path, index=False)
-        print(f"Wrote {len(merged)} rows to {output_path}")
+    merged.to_csv(output_path, index=False)
+    print(f"Wrote {len(merged)} rows to {output_path}")
 
     # Resize non-4096 images and update coordinates before any plotting or exclusion
     merged, did_resize = resize_images_to_target(

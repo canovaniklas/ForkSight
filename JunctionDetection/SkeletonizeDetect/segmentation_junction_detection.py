@@ -13,7 +13,7 @@ from Segmentation.PostProcessing.segmentation_postprocessing import remove_small
 # minimum length of significan branch for a junction
 MIN_BRANCH_LENGTH = 100
 # upper length limit for a branch connecting two junctions to be considered part of a 4-way junction (H shape)
-MAX_JUNCTION_CONNECTOR_LENGTH = 30
+MAX_JUNCTION_CONNECTOR_LENGTH = 20
 # terminal branches shorter than this are pruned (if a junction has multiple terminal branches, the longest is preserved to avoid over-pruning)
 MIN_TERMINAL_BRANCH_LENGTH = 40
 # junctions on cycles with total length below this are excluded, junctions on larger cycles may be valid
@@ -25,9 +25,9 @@ MAX_3WAY_PRIORITY_DISTANCE = 500
 # junctions of any type within this pixel distance of each other are merged into one
 JUNCTION_MERGE_DISTANCE = 50
 # skeleton tip pairs within this pixel distance whose trajectories align are reconnected (gap repair)
-MAX_SKELETON_GAP_DISTANCE = 20
+MAX_SKELETON_GAP_DISTANCE = 30
 # maximum angle (degrees) between a branch trajectory and the gap vector for reconnection
-MAX_GAP_ANGLE_DEG = 30
+MAX_GAP_ANGLE_DEG = 20
 # number of pixels along a branch used to estimate its tip direction for gap reconnection
 GAP_DIRECTION_SAMPLE_LENGTH = 20
 
