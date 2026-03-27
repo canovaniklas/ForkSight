@@ -351,7 +351,7 @@ def filter_junctions_by_length(skeleton: np.ndarray, junction_indices: np.ndarra
     # uses graph shortest-path distance, to find junctions that are close to the 3-way junction
     valid_3way_indices_by_arm_length_sum = sorted(
         [(j_idx, arm_len)
-         for j_idx, nof_arms, arm_len in junction_results if nof_arms == 3],
+         for j_idx, _, nof_arms, arm_len in junction_results if nof_arms == 3],
         key=lambda x: x[1],
         reverse=True,
     )

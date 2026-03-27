@@ -344,7 +344,7 @@ def _process_image(
             r["source"] = source
         return pred_rows, fn_annots, coords_3way, coords_4way, skeleton
 
-    raw_pred_rows, raw_fn_annots, _, _ = _detect_and_match(raw_stitched, "raw")
+    raw_pred_rows, raw_fn_annots, _, _, _ = _detect_and_match(raw_stitched, "raw")
     pp_pred_rows, pp_fn_annots, pp_coords_3way, pp_coords_4way, pp_skeleton = _detect_and_match(
         pp_stitched, "pp")
 
@@ -357,7 +357,7 @@ def _save_junction_detection_plot(
     pp_stitched: torch.Tensor,
     coords_3way: np.ndarray,
     coords_4way: np.ndarray,
-    pp_skeleton: torch.Tensor,
+    pp_skeleton: np.ndarray,
     gt_annotations: list[dict],
     plot_path: Path,
     title: str = "",
@@ -377,7 +377,7 @@ def _save_junction_detection_plot(
         groundtruth_mask=None,
         junction_coords_3way=coords_3way if len(coords_3way) > 0 else None,
         junction_coords_4way=coords_4way if len(coords_4way) > 0 else None,
-        skeleton=pp_skeleton.numpy() if pp_skeleton is not None else None,
+        skeleton=pp_skeleton,
         ax=ax,
         plot_grid=False,
     )
@@ -395,7 +395,7 @@ def _save_junction_detection_plot(
 
     ax.legend(loc="upper right", fontsize=8)
     plt.tight_layout()
-    fig.savefig(plot_path, bbox_inches="tight", dpi=100)
+    fig.savefig(plot_path, bbox_inches="tight", dpi=300)
     plt.close(fig)
 
 
