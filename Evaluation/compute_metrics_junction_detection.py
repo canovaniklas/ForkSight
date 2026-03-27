@@ -312,7 +312,7 @@ def _process_image(
     Returns
     -------
     raw_pred_rows, raw_fn_annots, pp_pred_rows, pp_fn_annots,
-    pp_stitched, pp_coords_3way, pp_coords_4way
+    pp_stitched, pp_coords_3way, pp_coords_4way, pp_skeleton
     """
     raw_stitched, _ = postprocess_segmentation_masks(
         pred_mask_patches, grid_size=GRID_SIZE,
@@ -329,7 +329,7 @@ def _process_image(
     pp_stitched = pp_stitched.detach().cpu()
 
     def _detect_and_match(mask: torch.Tensor, source: str):
-        coords_3way, coords_4way, _ = detect_junctions_in_segmentation_mask(
+        coords_3way, coords_4way, skeleton = detect_junctions_in_segmentation_mask(
             mask)
         if len(coords_3way) > 0 or len(coords_4way) > 0:
             pred_coords = np.concatenate([coords_3way, coords_4way], axis=0)
@@ -342,14 +342,14 @@ def _process_image(
         )
         for r in pred_rows:
             r["source"] = source
-        return pred_rows, fn_annots, coords_3way, coords_4way
+        return pred_rows, fn_annots, coords_3way, coords_4way, skeleton
 
     raw_pred_rows, raw_fn_annots, _, _ = _detect_and_match(raw_stitched, "raw")
-    pp_pred_rows, pp_fn_annots, pp_coords_3way, pp_coords_4way = _detect_and_match(
+    pp_pred_rows, pp_fn_annots, pp_coords_3way, pp_coords_4way, pp_skeleton = _detect_and_match(
         pp_stitched, "pp")
 
     return (raw_pred_rows, raw_fn_annots, pp_pred_rows, pp_fn_annots,
-            pp_stitched, pp_coords_3way, pp_coords_4way)
+            pp_stitched, pp_coords_3way, pp_coords_4way, pp_skeleton)
 
 
 def _save_junction_detection_plot(
@@ -357,6 +357,7 @@ def _save_junction_detection_plot(
     pp_stitched: torch.Tensor,
     coords_3way: np.ndarray,
     coords_4way: np.ndarray,
+    pp_skeleton: torch.Tensor,
     gt_annotations: list[dict],
     plot_path: Path,
     title: str = "",
@@ -376,6 +377,7 @@ def _save_junction_detection_plot(
         groundtruth_mask=None,
         junction_coords_3way=coords_3way if len(coords_3way) > 0 else None,
         junction_coords_4way=coords_4way if len(coords_4way) > 0 else None,
+        skeleton=pp_skeleton.numpy() if pp_skeleton is not None else None,
         ax=ax,
         plot_grid=False,
     )
@@ -407,6 +409,7 @@ def _evaluate_model(
     out_dir: Path,
     is_test: bool = False,
     plot_dir: Path | None = None,
+    plot_skeleton: bool = False,
 ) -> dict:
     """Run the full evaluation loop for one model and return a metrics row dict."""
     raw_pred_rows_all: list[dict] = []
@@ -428,7 +431,7 @@ def _evaluate_model(
         pred_mask_patches = _load_pred_patches(model_pred_dir, stem)
 
         raw_preds, raw_fns, pp_preds, pp_fns, \
-            pp_stitched, pp_coords_3way, pp_coords_4way = _process_image(
+            pp_stitched, pp_coords_3way, pp_coords_4way, pp_skeleton = _process_image(
                 pred_mask_patches, gt_annotations, matching_threshold,
             )
 
@@ -445,6 +448,7 @@ def _evaluate_model(
             _save_junction_detection_plot(
                 full_img, pp_stitched,
                 pp_coords_3way, pp_coords_4way,
+                pp_skeleton if plot_skeleton else None,
                 gt_annotations,
                 plot_dir / f"{stem}.png",
                 title=f"{model_key} — {stem}",
@@ -641,6 +645,8 @@ def main():
                         help="Break after computing metrics for the first image")
     parser.add_argument("--plot", action="store_true",
                         help="Save stitched-image plots with junction markers per model")
+    parser.add_argument("--plot-skeleton", action="store_true",
+                        help="Overlay skeleton on plots (only if --plot is set)")
     args = parser.parse_args()
 
     env_utils.load_forksight_env()
@@ -728,6 +734,7 @@ def main():
             out_dir=out_dir,
             is_test=args.is_test,
             plot_dir=_PLOT_DIR / safe_name if _PLOT_DIR else None,
+            plot_skeleton=args.plot_skeleton,
         )
         new_metrics_rows.append(row)
 

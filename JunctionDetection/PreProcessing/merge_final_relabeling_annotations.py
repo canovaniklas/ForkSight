@@ -278,6 +278,12 @@ def main():
         df_csv = load_agreed_csv(args.csv)
         print(f"JSON points: {len(df_json)}, CSV points: {len(df_csv)}")
         merged = pd.concat([df_json, df_csv], ignore_index=True)
+
+        # remove annotations for images that were manually excluded (in dir images_excluded_manually/)
+        images_manually_excluded = [p.stem for p in (
+            junction_detection_dir / "images_excluded_manually").glob("*.png")]
+        merged = merged[~merged["image"].isin(images_manually_excluded)]
+
         merged.to_csv(output_path, index=False)
         print(f"Wrote {len(merged)} rows to {output_path}")
 
