@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from skimage.morphology import skeletonize
+from skimage.draw import line as draw_line
 from skan.csr import skeleton_to_csgraph, summarize, Skeleton
 import networkx as nx
 from scipy.spatial import KDTree
@@ -23,6 +24,12 @@ JUNCTION_CYCLE_PROXIMITY_DISTANCE = 150
 MAX_3WAY_PRIORITY_DISTANCE = 500
 # junctions of any type within this pixel distance of each other are merged into one
 JUNCTION_MERGE_DISTANCE = 50
+# skeleton tip pairs within this pixel distance whose trajectories align are reconnected (gap repair)
+MAX_SKELETON_GAP_DISTANCE = 20
+# maximum angle (degrees) between a branch trajectory and the gap vector for reconnection
+MAX_GAP_ANGLE_DEG = 30
+# number of pixels along a branch used to estimate its tip direction for gap reconnection
+GAP_DIRECTION_SAMPLE_LENGTH = 20
 
 
 def skeletonize_mask(segmentation_mask: torch.Tensor) -> np.ndarray:
@@ -93,6 +100,94 @@ def prune_skeleton(skeleton: np.ndarray, iterations: int = 3) -> np.ndarray:
         current_skeleton = skeletonize(current_skeleton > 0).astype(np.uint8)
 
     return current_skeleton
+
+
+def _fit_tip_direction(path_coords, sample_length, from_src):
+    if from_src:
+        segment = path_coords[:min(sample_length, len(path_coords))]
+        tip, interior = segment[0], segment[-1]
+    else:
+        segment = path_coords[max(0, len(path_coords) - sample_length):]
+        tip, interior = segment[-1], segment[0]
+    if len(segment) < 2:
+        return None
+    _, _, vh = np.linalg.svd(
+        segment - segment.mean(axis=0), full_matrices=False)
+    direction = vh[0]
+    if np.dot(tip - interior, direction) < 0:
+        direction = -direction
+    return direction
+
+
+def reconnect_skeleton_gaps(skeleton: np.ndarray) -> np.ndarray:
+    skel_obj = Skeleton(skeleton)
+    stats = summarize(skel_obj)
+    stats = stats[stats['node-id-src'] != stats['node-id-dst']]
+    _, coordinates, degrees = get_graph_coordinates_degrees(skeleton)
+
+    tip_indices = np.where(degrees == 1)[0]
+    if len(tip_indices) < 2:
+        return skeleton
+
+    tip_directions = {}
+    for tip_idx in tip_indices:
+        tip_branches = stats[(stats['node-id-src'] == tip_idx)
+                             | (stats['node-id-dst'] == tip_idx)]
+        if len(tip_branches) != 1:
+            continue
+        branch = tip_branches.iloc[0]
+        path_coords = skel_obj.path_coordinates(branch.name).astype(float)
+        from_src = (int(branch['node-id-src']) == tip_idx)
+        direction = _fit_tip_direction(
+            path_coords, GAP_DIRECTION_SAMPLE_LENGTH, from_src)
+        if direction is not None:
+            tip_directions[tip_idx] = direction
+
+    tip_list = list(tip_directions.keys())
+    if len(tip_list) < 2:
+        return skeleton
+
+    tip_coords = np.array([coordinates[t] for t in tip_list])
+    pairs = KDTree(tip_coords).query_pairs(MAX_SKELETON_GAP_DISTANCE)
+    cos_threshold = np.cos(np.deg2rad(MAX_GAP_ANGLE_DEG))
+
+    scored_candidates = []
+    for i, j in pairs:
+        c1, c2 = tip_coords[i], tip_coords[j]
+        d1, d2 = tip_directions[tip_list[i]], tip_directions[tip_list[j]]
+
+        gap_vec = c2 - c1
+        gap_norm = np.linalg.norm(gap_vec)
+        if gap_norm == 0:
+            continue
+        gap_unit = gap_vec / gap_norm
+
+        dot1 = np.dot(d1, gap_unit)
+        dot2 = np.dot(d2, -gap_unit)
+        if dot1 < cos_threshold or dot2 < cos_threshold:
+            continue
+
+        avg_axis = d1 - d2
+        axis_norm = np.linalg.norm(avg_axis)
+        if axis_norm < 1e-8 or abs(np.dot(avg_axis / axis_norm, gap_unit)) < cos_threshold:
+            continue
+
+        scored_candidates.append((dot1 + dot2, i, j))
+
+    scored_candidates.sort(key=lambda x: -x[0])
+
+    used = set()
+    result = skeleton.copy()
+    for _, i, j in scored_candidates:
+        if i in used or j in used:
+            continue
+        rr, cc = draw_line(int(tip_coords[i][0]), int(tip_coords[i][1]),
+                           int(tip_coords[j][0]), int(tip_coords[j][1]))
+        result[rr, cc] = 1
+        used.add(i)
+        used.add(j)
+
+    return skeletonize(result > 0).astype(np.uint8)
 
 
 def get_graph_coordinates_degrees(skeleton: np.ndarray):
@@ -335,6 +430,7 @@ def detect_junctions_in_segmentation_mask(
     segmentation_mask = remove_small_bbox_objects(segmentation_mask)
     skeleton = skeletonize_mask(segmentation_mask)
     skeleton = prune_skeleton(skeleton)
+    skeleton = reconnect_skeleton_gaps(skeleton)
 
     _, _, degrees = get_graph_coordinates_degrees(skeleton)
 
