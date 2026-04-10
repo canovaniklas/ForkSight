@@ -1,8 +1,7 @@
 import torch
 import numpy as np
-from skimage.morphology import skeletonize, disk
+from skimage.morphology import skeletonize
 from skimage.draw import line as draw_line
-from scipy.ndimage import binary_closing
 from skan.csr import skeleton_to_csgraph, summarize, Skeleton
 import networkx as nx
 from scipy.spatial import KDTree
@@ -26,15 +25,13 @@ MAX_3WAY_PRIORITY_DISTANCE = 500
 # junctions of any type within this pixel distance of each other are merged into one
 JUNCTION_MERGE_DISTANCE = 50
 # skeleton tip pairs within this pixel distance whose trajectories align are reconnected (gap repair)
-MAX_SKELETON_GAP_DISTANCE = 30
+MAX_SKELETON_GAP_DISTANCE = 40
 # maximum angle (degrees) between a branch trajectory and the gap vector for reconnection
 MAX_GAP_ANGLE_DEG = 20
 # number of pixels along a branch used to estimate its tip direction for gap reconnection
 GAP_DIRECTION_SAMPLE_LENGTH = 20
 # skeleton cycles with total perimeter below this are collapsed by removing the shortest edge
-MIN_SMALL_CYCLE_PRUNE_LENGTH = 40
-# radius of the disk structuring element for morphological closing before skeletonization
-MORPHOLOGICAL_CLOSING_RADIUS = 3
+MIN_SMALL_CYCLE_PRUNE_LENGTH = 80
 
 
 def skeletonize_mask(segmentation_mask: torch.Tensor) -> np.ndarray:
@@ -479,12 +476,6 @@ def detect_junctions_in_segmentation_mask(
     (N, 2) in (x, y) image coordinates.
     '''
     segmentation_mask = remove_small_bbox_objects(segmentation_mask)
-
-    # Morphological closing to bridge small gaps before skeletonization
-    mask_np = segmentation_mask.detach().cpu().squeeze().numpy().astype(bool)
-    mask_np = binary_closing(mask_np, structure=disk(MORPHOLOGICAL_CLOSING_RADIUS))
-    segmentation_mask = torch.from_numpy(mask_np.astype(np.float32)).unsqueeze(0)
-
     skeleton = skeletonize_mask(segmentation_mask)
     skeleton = prune_skeleton(skeleton)
     skeleton = reconnect_skeleton_gaps(skeleton)
