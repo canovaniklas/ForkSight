@@ -51,6 +51,11 @@ from Evaluation.pipeline_evaluation_shared import (
     PATCH_SIZE,
     GRID_SIZE,
 )
+from Evaluation.fiber_evaluation import (
+    label_fibers,
+    match_gt_to_fibers,
+    compute_fiber_metrics,
+)
 
 _JUNCTION_TYPE_3_WAY = "3-way"
 _JUNCTION_TYPE_4_WAY = "4-way"
@@ -417,6 +422,8 @@ def _evaluate_model(
     pp_pred_rows_all: list[dict] = []
     pp_fn_all: list[dict] = []
     pred_csv_rows: list[dict] = []
+    fiber_csv_rows: list[dict] = []
+    fiber_metrics_all: list[dict] = []
 
     if plot_dir is not None:
         plot_dir.mkdir(parents=True, exist_ok=True)
@@ -443,6 +450,16 @@ def _evaluate_model(
         for r in raw_preds + pp_preds:
             pred_csv_rows.append({"image": stem, **r})
 
+        # --- Per-fiber evaluation ---
+        labeled_mask, fibers = label_fibers(
+            pp_stitched, pp_coords_3way, pp_coords_4way)
+        gt_by_fiber = match_gt_to_fibers(labeled_mask, gt_annotations)
+        img_fiber_rows, img_fiber_metrics = compute_fiber_metrics(
+            fibers, gt_by_fiber)
+        for r in img_fiber_rows:
+            fiber_csv_rows.append({"image": stem, **r})
+        fiber_metrics_all.append(img_fiber_metrics)
+
         if plot_dir is not None:
             _, full_img = load_full_image_as_patches(img_path)
             _save_junction_detection_plot(
@@ -466,8 +483,35 @@ def _evaluate_model(
     pred_df.to_csv(pred_path, index=False)
     print(f"\n  Saved predictions as {pred_path}")
 
+    # Save per-fiber CSV
+    if fiber_csv_rows:
+        fiber_df = pd.DataFrame(fiber_csv_rows)
+        fiber_path = out_dir / f"fibers_{safe_name}.csv"
+        fiber_df.to_csv(fiber_path, index=False)
+        print(f"  Saved fiber predictions as {fiber_path}")
+
     raw_metrics = _compute_metrics(raw_pred_rows_all, raw_fn_all)
     pp_metrics = _compute_metrics(pp_pred_rows_all, pp_fn_all)
+
+    # Aggregate fiber metrics across images (sum counts, recompute rates)
+    agg_fiber: dict = {}
+    if fiber_metrics_all:
+        sum_keys = ["fiber_tp", "fiber_fp", "fiber_fn",
+                    "fiber_class_correct", "fiber_class_ambiguous",
+                    "fiber_class_incorrect", "fiber_n_unmatched_gt"]
+        for k in sum_keys:
+            agg_fiber[k] = sum(m[k] for m in fiber_metrics_all)
+        tp = agg_fiber["fiber_tp"]
+        fp = agg_fiber["fiber_fp"]
+        fn = agg_fiber["fiber_fn"]
+        agg_fiber["fiber_precision"] = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        agg_fiber["fiber_recall"] = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        p, r = agg_fiber["fiber_precision"], agg_fiber["fiber_recall"]
+        agg_fiber["fiber_f1"] = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
+        agg_fiber["fiber_class_accuracy"] = (
+            (agg_fiber["fiber_class_correct"] + agg_fiber["fiber_class_ambiguous"]) / tp
+            if tp > 0 else 0.0
+        )
 
     print(f"\n  [raw]  loc P={raw_metrics['precision_loc']:.3f} "
           f"R={raw_metrics['recall_loc']:.3f} F1={raw_metrics['f1_loc']:.3f} "
@@ -475,12 +519,21 @@ def _evaluate_model(
     print(f"  [pp]   loc P={pp_metrics['precision_loc']:.3f} "
           f"R={pp_metrics['recall_loc']:.3f} F1={pp_metrics['f1_loc']:.3f} "
           f"| type acc={pp_metrics['type_accuracy']:.3f}")
+    if agg_fiber:
+        print(f"  [fiber] P={agg_fiber['fiber_precision']:.3f} "
+              f"R={agg_fiber['fiber_recall']:.3f} F1={agg_fiber['fiber_f1']:.3f} "
+              f"| class acc={agg_fiber['fiber_class_accuracy']:.3f} "
+              f"(correct={agg_fiber['fiber_class_correct']}, "
+              f"ambiguous={agg_fiber['fiber_class_ambiguous']}, "
+              f"incorrect={agg_fiber['fiber_class_incorrect']})")
 
     row: dict = {"model": model_key, "dataset": model_dataset}
     for k, v in raw_metrics.items():
         row[f"raw_{k}"] = v
     for k, v in pp_metrics.items():
         row[f"pp_{k}"] = v
+    for k, v in agg_fiber.items():
+        row[k] = v
     return row
 
 
