@@ -13,7 +13,7 @@ from Segmentation.PostProcessing.segmentation_postprocessing import remove_small
 # minimum length of significan branch for a junction
 MIN_BRANCH_LENGTH = 100
 # upper length limit for a branch connecting two junctions to be considered part of a 4-way junction (H shape)
-MAX_JUNCTION_CONNECTOR_LENGTH = 30
+MAX_JUNCTION_CONNECTOR_LENGTH = 40
 # terminal branches shorter than this are pruned (if a junction has multiple terminal branches, the longest is preserved to avoid over-pruning)
 MIN_TERMINAL_BRANCH_LENGTH = 40
 # junctions on cycles with total length below this are excluded, junctions on larger cycles may be valid
@@ -31,7 +31,7 @@ MAX_GAP_ANGLE_DEG = 20
 # number of pixels along a branch used to estimate its tip direction for gap reconnection
 GAP_DIRECTION_SAMPLE_LENGTH = 20
 # skeleton cycles with total perimeter below this are collapsed by removing the shortest edge
-MIN_SMALL_CYCLE_PRUNE_LENGTH = 80
+MIN_SMALL_CYCLE_PRUNE_LENGTH = 100
 
 
 def skeletonize_mask(segmentation_mask: torch.Tensor) -> np.ndarray:
