@@ -29,6 +29,7 @@ Outputs (written to EVALUATION_OUTPUT_DIR/junction_detection/<timestamp>/):
 import argparse
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -320,6 +321,49 @@ def _compute_metrics(
     return metrics
 
 
+_SAMPLE_DATE_PREFIX_RE = re.compile(r"^\d{8}_")
+
+
+def _image_to_sample(stem: str) -> str:
+    """Map an image stem to its sample name.
+
+    Strips any leading 8-digit date prefix and takes everything before
+    ``_tileset_`` (case-insensitive).  Examples:
+      Dani_Funghi_TileSet_11_Tile_014-015     -> dani_funghi
+      20240425_andrea_lila_tileset_14_tile... -> andrea_lila
+      Veronica_Sample1_TileSet_19_Tile_011-008 -> veronica_sample1
+    """
+    s = stem.lower()
+    s = _SAMPLE_DATE_PREFIX_RE.sub("", s)
+    if "_tileset_" in s:
+        return s.split("_tileset_")[0]
+    return s
+
+
+def _aggregate_fiber_metrics(per_image: list[dict]) -> dict:
+    """Sum fiber count metrics across images and recompute rates."""
+    if not per_image:
+        return {}
+    agg: dict = {}
+    sum_keys = ["fiber_tp", "fiber_fp", "fiber_fn",
+                "fiber_class_correct", "fiber_class_ambiguous",
+                "fiber_class_incorrect", "fiber_n_unmatched_gt"]
+    for k in sum_keys:
+        agg[k] = sum(m[k] for m in per_image)
+    tp = agg["fiber_tp"]
+    fp = agg["fiber_fp"]
+    fn = agg["fiber_fn"]
+    agg["fiber_precision"] = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    agg["fiber_recall"] = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    p, r = agg["fiber_precision"], agg["fiber_recall"]
+    agg["fiber_f1"] = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
+    agg["fiber_class_accuracy"] = (
+        (agg["fiber_class_correct"] + agg["fiber_class_ambiguous"]) / tp
+        if tp > 0 else 0.0
+    )
+    return agg
+
+
 def _compute_image_level_metrics(image_stats: list[dict]) -> dict:
     """Per-image binary detection stats.
 
@@ -493,6 +537,13 @@ def _evaluate_model(
     image_stats_raw: list[dict] = []
     image_stats_pp: list[dict] = []
 
+    # Per-image bookkeeping for sample-level aggregation
+    raw_preds_by_image: dict[str, list[dict]] = {}
+    raw_fns_by_image: dict[str, list[dict]] = {}
+    pp_preds_by_image: dict[str, list[dict]] = {}
+    pp_fns_by_image: dict[str, list[dict]] = {}
+    fiber_metrics_by_image: dict[str, dict] = {}
+
     if plot_dir is not None:
         plot_dir.mkdir(parents=True, exist_ok=True)
 
@@ -514,6 +565,11 @@ def _evaluate_model(
         raw_fn_all.extend(raw_fns)
         pp_pred_rows_all.extend(pp_preds)
         pp_fn_all.extend(pp_fns)
+
+        raw_preds_by_image[stem] = raw_preds
+        raw_fns_by_image[stem] = raw_fns
+        pp_preds_by_image[stem] = pp_preds
+        pp_fns_by_image[stem] = pp_fns
 
         for r in raw_preds + pp_preds:
             pred_csv_rows.append({"image": stem, **r})
@@ -540,6 +596,7 @@ def _evaluate_model(
         for r in img_fiber_rows:
             fiber_csv_rows.append({"image": stem, **r})
         fiber_metrics_all.append(img_fiber_metrics)
+        fiber_metrics_by_image[stem] = img_fiber_metrics
 
         if plot_dir is not None:
             _, full_img = load_full_image_as_patches(img_path)
@@ -584,24 +641,43 @@ def _evaluate_model(
     print(f"  Saved per-image stats as {image_path}")
 
     # Aggregate fiber metrics across images (sum counts, recompute rates)
-    agg_fiber: dict = {}
-    if fiber_metrics_all:
-        sum_keys = ["fiber_tp", "fiber_fp", "fiber_fn",
-                    "fiber_class_correct", "fiber_class_ambiguous",
-                    "fiber_class_incorrect", "fiber_n_unmatched_gt"]
-        for k in sum_keys:
-            agg_fiber[k] = sum(m[k] for m in fiber_metrics_all)
-        tp = agg_fiber["fiber_tp"]
-        fp = agg_fiber["fiber_fp"]
-        fn = agg_fiber["fiber_fn"]
-        agg_fiber["fiber_precision"] = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        agg_fiber["fiber_recall"] = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        p, r = agg_fiber["fiber_precision"], agg_fiber["fiber_recall"]
-        agg_fiber["fiber_f1"] = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
-        agg_fiber["fiber_class_accuracy"] = (
-            (agg_fiber["fiber_class_correct"] + agg_fiber["fiber_class_ambiguous"]) / tp
-            if tp > 0 else 0.0
-        )
+    agg_fiber = _aggregate_fiber_metrics(fiber_metrics_all)
+
+    # --- Per-sample stats (pp pipeline only) ---
+    processed_stems = list(pp_preds_by_image.keys())
+    sample_to_stems: dict[str, list[str]] = {}
+    for s in processed_stems:
+        sample_to_stems.setdefault(_image_to_sample(s), []).append(s)
+
+    per_sample_rows: list[dict] = []
+    for sample, stems in sorted(sample_to_stems.items()):
+        s_pred_rows: list[dict] = []
+        s_fn_annots: list[dict] = []
+        s_img_stats: list[dict] = []
+        s_fiber_metrics: list[dict] = []
+        for st in stems:
+            s_pred_rows.extend(pp_preds_by_image[st])
+            s_fn_annots.extend(pp_fns_by_image[st])
+            s_img_stats.append(next(
+                x for x in image_stats_pp if x["image"] == st))
+            if st in fiber_metrics_by_image:
+                s_fiber_metrics.append(fiber_metrics_by_image[st])
+
+        s_metrics = _compute_metrics(s_pred_rows, s_fn_annots)
+        s_image_metrics = _compute_image_level_metrics(s_img_stats)
+        s_fiber = _aggregate_fiber_metrics(s_fiber_metrics)
+
+        s_row = {"sample": sample, "n_images": len(stems)}
+        s_row.update(s_metrics)
+        s_row.update(s_image_metrics)
+        s_row.update(s_fiber)
+        per_sample_rows.append(s_row)
+
+    if per_sample_rows:
+        per_sample_df = pd.DataFrame(per_sample_rows)
+        per_sample_path = out_dir / f"per_sample_{safe_name}.csv"
+        per_sample_df.to_csv(per_sample_path, index=False)
+        print(f"  Saved per-sample stats as {per_sample_path}")
 
     print(f"\n  [raw]  loc P={raw_metrics['precision_loc']:.3f} "
           f"R={raw_metrics['recall_loc']:.3f} F1={raw_metrics['f1_loc']:.3f} "
@@ -637,6 +713,18 @@ def _evaluate_model(
               f"(correct={agg_fiber['fiber_class_correct']}, "
               f"ambiguous={agg_fiber['fiber_class_ambiguous']}, "
               f"incorrect={agg_fiber['fiber_class_incorrect']})")
+
+    if per_sample_rows:
+        print(f"\n  Per-sample (pp):")
+        for s_row in per_sample_rows:
+            f1_3 = s_row.get("class_f1_3way", 0.0)
+            f1_4 = s_row.get("class_f1_4way", 0.0)
+            print(f"    [{s_row['sample']}] N={s_row['n_images']:3d}  "
+                  f"loc P={s_row['precision_loc']:.3f} "
+                  f"R={s_row['recall_loc']:.3f} F1={s_row['f1_loc']:.3f}  "
+                  f"| 3w F1={f1_3:.3f} 4w F1={f1_4:.3f}  "
+                  f"| img F1={s_row['image_f1']:.3f} "
+                  f"| fib F1={s_row.get('fiber_f1', 0.0):.3f}")
 
     row: dict = {"model": model_key, "dataset": model_dataset}
     for k, v in raw_metrics.items():
